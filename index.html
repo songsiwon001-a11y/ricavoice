@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>rica voice</title>
+<meta name="description" content="srjs가 만든 TTS 생성 ai인 rica! 텍스트를 입력하고 무료로 tts 음성을 합성하세요!">
+<style>
+  :root{--bg:#14121a;--card:#1e1b27;--line:#332e42;--fg:#f0ecf8;--sub:#9d94b5;--accent:#b78cff;--bad:#ff7a8a}
+  *{box-sizing:border-box}
+  body{margin:0;min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;background:var(--bg);color:var(--fg);font-family:system-ui,-apple-system,"Apple SD Gothic Neo","Malgun Gothic",sans-serif}
+  main{width:100%;max-width:560px;padding:24px 16px 8px}
+  h1{margin:0;font-size:30px;text-align:center;letter-spacing:.5px}
+  h1 span{color:var(--accent)}
+  .desc{margin:8px 0 20px;text-align:center;font-size:13px;color:var(--sub)}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:18px}
+  textarea{width:100%;min-height:140px;resize:vertical;background:#15131c;color:var(--fg);border:1px solid var(--line);border-radius:12px;padding:14px;font-size:18px;font-family:inherit}
+  textarea:focus{outline:2px solid var(--accent)}
+  button,.btn{background:var(--accent);color:#1a1226;border:0;border-radius:12px;padding:12px 22px;font-size:16px;font-weight:700;cursor:pointer;text-decoration:none;display:inline-block}
+  button#gen{width:100%;margin-top:12px}
+  button:disabled{opacity:.45;cursor:not-allowed}
+  .btn.sec{background:#2b2639;color:var(--fg);border:1px solid var(--line)}
+  #msg{text-align:center;margin-top:14px;font-size:15px;color:var(--sub);min-height:22px}
+  #msg.err{color:var(--bad)}
+  #result{display:none;margin-top:14px}
+  audio{width:100%}
+  #result .btn{display:block;text-align:center;margin-top:10px}
+  footer{padding:18px 16px 26px;font-size:12px;color:var(--sub);text-align:center}
+</style>
+</head>
+<body>
+<main>
+  <h1>rica <span>voice</span></h1>
+  <p class="desc">srjs가 만든 TTS 생성 ai인 rica! 텍스트를 입력하고 무료로 tts 음성을 합성하세요!</p>
+  <div class="card">
+    <textarea id="text" placeholder="텍스트를 입력하세요"></textarea>
+    <button id="gen">생성</button>
+    <div id="msg"></div>
+    <div id="result">
+      <audio id="player" controls></audio>
+      <a id="dl" class="btn sec" download="rica-voice.wav">wav 다운로드</a>
+    </div>
+  </div>
+</main>
+<footer>Copyright 2026 super rice jamjam studio!</footer>
+
+<script>
+(() => {
+  const KEYS = [...'ㄱㄴㄷㄹㅁㅂㅅㅇㅈㅊㅋㅌㅍㅎㅏㅓㅗㅜㅡㅣㅐㅔ'];
+  const CHO  = [...'ㄱㄲㄴㄷㄸㄹㅁㅂㅃㅅㅆㅇㅈㅉㅊㅋㅌㅍㅎ'];
+  const JUNG = [...'ㅏㅐㅑㅒㅓㅔㅕㅖㅗㅘㅙㅚㅛㅜㅝㅞㅟㅠㅡㅢㅣ'];
+  const JONG = ['', ...'ㄱㄲㄳㄴㄵㄶㄷㄹㄺㄻㄼㄽㄾㄿㅀㅁㅂㅄㅅㅆㅇㅈㅊㅋㅌㅍㅎ'];
+  const CHO_MAP = {'ㄲ':'ㄱ','ㄸ':'ㄷ','ㅃ':'ㅂ','ㅆ':'ㅅ','ㅉ':'ㅈ'};
+  const JUNG_MAP = {
+    'ㅏ':['ㅏ'],'ㅐ':['ㅐ'],'ㅑ':['ㅣ','ㅏ'],'ㅒ':['ㅣ','ㅐ'],
+    'ㅓ':['ㅓ'],'ㅔ':['ㅔ'],'ㅕ':['ㅣ','ㅓ'],'ㅖ':['ㅣ','ㅔ'],
+    'ㅗ':['ㅗ'],'ㅘ':['ㅗ','ㅏ'],'ㅙ':['ㅗ','ㅐ'],'ㅚ':['ㅗ','ㅔ'],'ㅛ':['ㅣ','ㅗ'],
+    'ㅜ':['ㅜ'],'ㅝ':['ㅜ','ㅓ'],'ㅞ':['ㅜ','ㅔ'],'ㅟ':['ㅜ','ㅣ'],'ㅠ':['ㅣ','ㅜ'],
+    'ㅡ':['ㅡ'],'ㅢ':['ㅡ','ㅣ'],'ㅣ':['ㅣ']
+  };
+  const JONG_MAP = {
+    'ㄲ':['ㄱ'],'ㄳ':['ㄱ','ㅅ'],'ㄵ':['ㄴ','ㅈ'],'ㄶ':['ㄴ','ㅎ'],'ㄺ':['ㄹ','ㄱ'],'ㄻ':['ㄹ','ㅁ'],
+    'ㄼ':['ㄹ','ㅂ'],'ㄽ':['ㄹ','ㅅ'],'ㄾ':['ㄹ','ㅌ'],'ㄿ':['ㄹ','ㅍ'],'ㅀ':['ㄹ','ㅎ'],'ㅄ':['ㅂ','ㅅ'],'ㅆ':['ㅅ']
+  };
+  const GAP_MS = 180;
+  const ERR = '현재 음성 합성 모델에 오류가 발생했습니다.';
+
+  const $ = id => document.getElementById(id);
+  const msg = $('msg'), gen = $('gen'), result = $('result'), player = $('player'), dl = $('dl');
+  const AC = window.AudioContext || window.webkitAudioContext;
+  const raw = {};
+  let ctx = null, failed = false;
+
+  async function loadAll(){
+    ctx = new AC();
+    await Promise.all(KEYS.map(async k => {
+      const r = await fetch(encodeURIComponent(k) + '.wav');
+      if (!r.ok) throw new Error(k);
+      const ab = await ctx.decodeAudioData(await r.arrayBuffer());
+      const mono = new Float32Array(ab.length);
+      for (let c = 0; c < ab.numberOfChannels; c++){
+        const d = ab.getChannelData(c);
+        for (let i = 0; i < d.length; i++) mono[i] += d[i] / ab.numberOfChannels;
+      }
+      const thr = 0.006;
+      let s = 0, e = mono.length - 1;
+      while (s < mono.length && Math.abs(mono[s]) < thr) s++;
+      while (e > s && Math.abs(mono[e]) < thr) e--;
+      raw[k] = mono.subarray(s, e + 1);
+    }));
+  }
+
+  const loading = loadAll().catch(() => {
+    failed = true;
+    gen.disabled = true;
+    msg.className = 'err';
+    msg.textContent = ERR;
+  });
+
+  function buildQueue(text){
+    const q = [];
+    for (const ch of text){
+      const code = ch.charCodeAt(0);
+      if (code >= 0xAC00 && code <= 0xD7A3){
+        const idx = code - 0xAC00;
+        const cho = CHO[Math.floor(idx / 588)];
+        const jung = JUNG[Math.floor((idx % 588) / 28)];
+        const jong = JONG[idx % 28];
+        if (cho !== 'ㅇ') q.push(CHO_MAP[cho] || cho);
+        q.push(...JUNG_MAP[jung]);
+        if (jong) q.push(...(JONG_MAP[jong] || [jong]));
+      } else if (JUNG_MAP[ch]){
+        q.push(...JUNG_MAP[ch]);
+      } else if (KEYS.includes(ch) || CHO_MAP[ch] || JONG_MAP[ch]){
+        q.push(...(CHO_MAP[ch] ? [CHO_MAP[ch]] : JONG_MAP[ch] || [ch]));
+      } else if (ch === '\n'){
+        q.push(2);
+      } else if (/\s/.test(ch)){
+        q.push(1);
+      }
+    }
+    return q;
+  }
+
+  function merge(q, sr){
+    const parts = [];
+    let total = 0;
+    for (const it of q){
+      if (typeof it === 'number'){
+        const n = Math.round(sr * GAP_MS / 1000 * it);
+        parts.push(n); total += n;
+      } else if (raw[it]){
+        parts.push(raw[it]); total += raw[it].length;
+      }
+    }
+    const out = new Float32Array(total);
+    let pos = 0;
+    for (const p of parts){
+      if (typeof p === 'number') pos += p;
+      else { out.set(p, pos); pos += p.length; }
+    }
+    return out;
+  }
+
+  function encodeWav(samples, sr){
+    const buf = new ArrayBuffer(44 + samples.length * 2);
+    const v = new DataView(buf);
+    const w = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+    w(0,'RIFF'); v.setUint32(4, 36 + samples.length * 2, true); w(8,'WAVE'); w(12,'fmt ');
+    v.setUint32(16,16,true); v.setUint16(20,1,true); v.setUint16(22,1,true);
+    v.setUint32(24,sr,true); v.setUint32(28,sr * 2,true); v.setUint16(32,2,true); v.setUint16(34,16,true);
+    w(36,'data'); v.setUint32(40, samples.length * 2, true);
+    let o = 44;
+    for (let i = 0; i < samples.length; i++, o += 2){
+      const s = Math.max(-1, Math.min(1, samples[i]));
+      v.setInt16(o, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+    }
+    return new Blob([buf], {type:'audio/wav'});
+  }
+
+  let lastUrl = null;
+  gen.addEventListener('click', async () => {
+    if (failed) return;
+    const q = buildQueue($('text').value);
+    if (!q.some(i => typeof i === 'string')) return;
+
+    gen.disabled = true;
+    result.style.display = 'none';
+    player.pause();
+    msg.className = '';
+    msg.textContent = 'rica가 음성을 합성하고 있어요.';
+
+    await loading;
+    if (failed) return;
+    await new Promise(r => setTimeout(r, 500));
+
+    const sr = ctx.sampleRate;
+    const blob = encodeWav(merge(q, sr), sr);
+    if (lastUrl) URL.revokeObjectURL(lastUrl);
+    lastUrl = URL.createObjectURL(blob);
+    player.src = lastUrl;
+    dl.href = lastUrl;
+
+    msg.textContent = '';
+    result.style.display = 'block';
+    gen.disabled = false;
+    player.play().catch(() => {});
+  });
+})();
+</script>
+</body>
+</html>
