@@ -448,18 +448,45 @@
     return out;
   }
 
-  function resample(data, rate){
-    const n = Math.floor(data.length / rate);
-    const out = new Float32Array(n);
-    for (let i = 0; i < n; i++){
-      const pos = i * rate;
-      const j = Math.floor(pos);
-      const f = pos - j;
-      const a = data[j];
-      const b = j + 1 < data.length ? data[j + 1] : a;
-      out[i] = a + (b - a) * f;
+  function stretch(data, rate){
+    const N = 2048, Hs = N / 2, tol = 512, Ha = Hs * rate;
+    const outLen = Math.floor(data.length / rate);
+    const out = new Float32Array(outLen + 2 * N);
+    const win = new Float32Array(N);
+    for (let i = 0; i < N; i++) win[i] = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / N);
+    const at = x => (x >= 0 && x < data.length ? data[x] : 0);
+    const frames = Math.ceil(outLen / Hs) + 1;
+    let prev = 0;
+    for (let k = 0; k < frames; k++){
+      let best = Math.round(k * Ha);
+      if (best >= data.length) break;
+      if (k > 0){
+        const ref = prev + Hs;
+        if (ref >= data.length) break;
+        const center = best;
+        let bestScore = -Infinity;
+        for (let c = Math.max(0, center - tol); c <= center + tol; c += 2){
+          let s = 0, e = 1e-9;
+          for (let i = 0; i < N; i += 4){
+            const x = at(c + i);
+            s += at(ref + i) * x;
+            e += x * x;
+          }
+          const score = s / Math.sqrt(e);
+          if (score > bestScore){
+            bestScore = score;
+            best = c;
+          }
+        }
+      }
+      const base = k * Hs;
+      for (let i = 0; i < N; i++){
+        const w = k === 0 && i < Hs ? 1 : win[i];
+        out[base + i] += at(best + i) * w;
+      }
+      prev = best;
     }
-    return out;
+    return out.subarray(0, outLen);
   }
 
   function encodeWav(samples, sr){
@@ -508,8 +535,8 @@
 
     const sr = ctx.sampleRate;
     let samples = merge(q, sr);
-    if (mode === 'fast') samples = resample(samples, 1.5);
-    if (mode === 'vfast') samples = resample(samples, 2);
+    if (mode === 'fast') samples = stretch(samples, 1.5);
+    if (mode === 'vfast') samples = stretch(samples, 2);
 
     const blob = encodeWav(samples, sr);
     if (lastUrl) URL.revokeObjectURL(lastUrl);
