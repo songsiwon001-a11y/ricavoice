@@ -22,7 +22,18 @@
   button,.btn{background:var(--accent);color:#1a1226;border:0;border-radius:12px;padding:12px 22px;font-size:16px;font-weight:700;cursor:pointer;text-decoration:none;display:inline-block}
   button#gen{width:100%;margin-top:12px}
   button:disabled{opacity:.45;cursor:not-allowed}
+  button.gear{padding:7px 12px;font-size:18px;line-height:1;background:#2b2639;color:var(--fg);border:1px solid var(--line);border-radius:10px}
   .btn.sec{background:#2b2639;color:var(--fg);border:1px solid var(--line)}
+  .settings{background:#15131c;border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:12px}
+  .settings .grp{font-size:13px;color:var(--sub);margin:0 0 8px}
+  .switchrow{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;font-size:15px}
+  .switch{position:relative;width:46px;height:26px;display:inline-block}
+  .switch input{opacity:0;width:0;height:0}
+  .slider{position:absolute;inset:0;background:#3a344a;border-radius:26px;cursor:pointer;transition:background .2s}
+  .slider::before{content:"";position:absolute;width:20px;height:20px;left:3px;top:3px;background:#fff;border-radius:50%;transition:transform .2s}
+  .switch input:checked + .slider{background:var(--accent)}
+  .switch input:checked + .slider::before{transform:translateX(20px)}
+  .settings select{width:100%;flex:none}
   #msg{text-align:center;margin-top:14px;font-size:15px;color:var(--sub);min-height:22px}
   #msg.err{color:var(--bad)}
   #result{display:none;margin-top:14px}
@@ -39,8 +50,30 @@
     <div class="model">
       <label for="model">모델</label>
       <select id="model">
-        <option value="1.2" selected>rica1.2</option>
+        <option value="1.5" selected>rica1.5</option>
+        <option value="1.4">rica1.4</option>
+        <option value="1.3">rica1.3</option>
+        <option value="1.2">rica1.2</option>
         <option value="1.1">rica1.1</option>
+      </select>
+      <button id="gear" class="gear" type="button" aria-label="설정">⚙</button>
+    </div>
+    <div id="settings" class="settings" style="display:none">
+      <div class="switchrow">
+        <span>구두점 발음</span>
+        <label class="switch"><input type="checkbox" id="punct"><span class="slider"></span></label>
+      </div>
+      <div class="switchrow" id="profRow" style="display:none">
+        <span>욕설 삐처리</span>
+        <label class="switch"><input type="checkbox" id="prof"><span class="slider"></span></label>
+      </div>
+      <p class="grp">음성 속도</p>
+      <select id="speed">
+        <option value="vslow">매우 느림</option>
+        <option value="slow">느림</option>
+        <option value="normal" selected>보통</option>
+        <option value="fast">빠름</option>
+        <option value="vfast">매우 빠름</option>
       </select>
     </div>
     <textarea id="text" placeholder="텍스트를 입력하세요"></textarea>
@@ -57,6 +90,7 @@
 <script>
 (() => {
   const KEYS = [...'ㄱㄴㄷㄹㅁㅂㅅㅇㅈㅊㅋㅌㅍㅎㅏㅓㅗㅜㅡㅣㅐㅔ'];
+  const CONSONANTS = new Set(KEYS.slice(0, 14));
   const CHO  = [...'ㄱㄲㄴㄷㄸㄹㅁㅂㅃㅅㅆㅇㅈㅉㅊㅋㅌㅍㅎ'];
   const JUNG = [...'ㅏㅐㅑㅒㅓㅔㅕㅖㅗㅘㅙㅚㅛㅜㅝㅞㅟㅠㅡㅢㅣ'];
   const JONG = ['', ...'ㄱㄲㄳㄴㄵㄶㄷㄹㄺㄻㄼㄽㄾㄿㅀㅁㅂㅄㅅㅆㅇㅈㅊㅋㅌㅍㅎ'];
@@ -85,11 +119,15 @@
   };
   const VOWEL_PAIR = new Set(['wh','ee','oo','ea','ai','ay','oa','ou','ow','au','aw','ie','oy','oi','ey']);
   const SONORANT = new Set(['ㄴ','ㅁ','ㄹ']);
+  const PUNCT_NAME = {'.':'마침표',',':'쉼표','?':'물음표',':':'콜론',';':'세미콜론',"'":'어퍼스트로피','"':'쿼테이션'};
+  const PUNCT_ALIAS = {'’':"'",'‘':"'",'“':'"','”':'"'};
+  const UNKNOWN = '알 수 없는 문자';
   const GAP_MS = 180;
   const ERR = '현재 음성 합성 모델에 오류가 발생했습니다.';
 
   const $ = id => document.getElementById(id);
-  const msg = $('msg'), gen = $('gen'), result = $('result'), player = $('player'), dl = $('dl'), model = $('model');
+  const msg = $('msg'), gen = $('gen'), result = $('result'), player = $('player'), dl = $('dl');
+  const model = $('model'), gear = $('gear'), settings = $('settings'), speed = $('speed');
   const AC = window.AudioContext || window.webkitAudioContext;
   const raw = {};
   let ctx = null, failed = false;
@@ -120,6 +158,35 @@
     msg.textContent = ERR;
   });
 
+  const beepLoading = (async () => {
+    try {
+      const r = await fetch('beep.wav');
+      if (!r.ok) return;
+      const ab = await ctx.decodeAudioData(await r.arrayBuffer());
+      const mono = new Float32Array(ab.length);
+      for (let c = 0; c < ab.numberOfChannels; c++){
+        const d = ab.getChannelData(c);
+        for (let i = 0; i < d.length; i++) mono[i] += d[i] / ab.numberOfChannels;
+      }
+      let peak = 0;
+      for (let i = 0; i < mono.length; i++) peak = Math.max(peak, Math.abs(mono[i]));
+      if (peak > 0) for (let i = 0; i < mono.length; i++) mono[i] /= peak;
+      raw.BEEP = mono;
+    } catch (e) {}
+  })();
+
+  function syncModel(){
+    const hasSettings = parseFloat(model.value) >= 1.3;
+    gear.style.display = hasSettings ? '' : 'none';
+    $('profRow').style.display = parseFloat(model.value) >= 1.4 ? '' : 'none';
+    if (!hasSettings) settings.style.display = 'none';
+  }
+  model.addEventListener('change', syncModel);
+  gear.addEventListener('click', () => {
+    settings.style.display = settings.style.display === 'none' ? 'block' : 'none';
+  });
+  syncModel();
+
   function pushSyllable(ch, q){
     const idx = ch.charCodeAt(0) - 0xAC00;
     const cho = CHO[Math.floor(idx / 588)];
@@ -128,6 +195,14 @@
     if (cho !== 'ㅇ') q.push(CHO_MAP[cho] || cho);
     q.push(...JUNG_MAP[jung]);
     if (jong) q.push(...(JONG_MAP[jong] || [jong]));
+  }
+
+  function pushText(str, q){
+    for (const ch of str){
+      const c = ch.charCodeAt(0);
+      if (c >= 0xAC00 && c <= 0xD7A3) pushSyllable(ch, q);
+      else if (/\s/.test(ch)) q.push(1);
+    }
   }
 
   function englishKeys(word){
@@ -167,18 +242,154 @@
     return out;
   }
 
-  function buildQueue(text, v12){
+  const PROFANITY = /씨발|시발(?!점|역)|씨팔|시팔|지랄|썅놈|썅|병신|개새끼|좆|존나|미친놈|미친년|염병|ㅅㅂ|ㅆㅂ|ㅈㄹ|ㅂㅅ/g;
+
+  const STRONG_WORDS = ['씨발','시발','씨팔','시팔','씨빨','시빨','씨벌','시벌','ㅅ발','ㅆ발','ㅅ팔','ㅆ팔','지랄','썅놈','썅','개새끼','개세끼','개색기','좆','존나','존내','조낸','졸라','미친놈','미친년','염병','ㅅㅂ','ㅆㅂ','ㅂㅅ','ㅈㄹ'];
+  const STRONG_EXCEPT = {'시발':['점','역']};
+
+  function toSkeleton(text){
+    const els = [];
+    let seg = 0, gap = false, i = 0;
+    for (const ch of text){
+      const a = i;
+      i += ch.length;
+      const code = ch.codePointAt(0);
+      let el = null;
+      if (code >= 0xAC00 && code <= 0xD7A3){
+        const idx = code - 0xAC00;
+        const cho = CHO[Math.floor(idx / 588)];
+        const jong = JONG[idx % 28];
+        el = {c: cho === 'ㅇ' ? '' : cho, v: JUNG[Math.floor((idx % 588) / 28)], j: jong ? (JONG_MAP[jong] ? JONG_MAP[jong][0] : jong) : ''};
+      } else if (/[ㄱ-ㅎ]/.test(ch)){
+        el = {c: ch, v: '', j: ''};
+      } else if (/[ㅏ-ㅣ]/.test(ch)){
+        el = {c: '', v: ch, j: ''};
+      } else if (/[cC]/.test(ch)){
+        el = {c: 'ㅆ', v: 'ㅣ', j: ''};
+      } else if (/[sSxX]/.test(ch)){
+        el = {c: 'ㅅ', v: 'ㅣ', j: ''};
+      } else if (ch === '8'){
+        el = {c: 'ㅍ', v: 'ㅏ', j: 'ㄹ'};
+      } else if (ch !== '\n' && /[\s\p{P}\p{S}\p{N}]/u.test(ch)){
+        gap = true;
+        continue;
+      }
+      if (!el){
+        els.push(null);
+        seg = 0;
+        gap = false;
+        continue;
+      }
+      const gapped = gap;
+      let joined = false;
+      if (gap){
+        joined = seg === 1;
+        if (!joined) els.push(null);
+        seg = 0;
+        gap = false;
+      }
+      el.a = a;
+      el.b = i;
+      el.joined = joined;
+      el.gapBefore = gapped;
+      el.mj = false;
+      els.push(el);
+      seg++;
+    }
+    const list = [];
+    for (const el of els){
+      const p = list[list.length - 1];
+      if (!el){
+        if (p) list.push(null);
+        continue;
+      }
+      if (p){
+        if (el.c === '' && el.v && el.v === p.v && !p.j){
+          p.j = el.j;
+          p.b = el.b;
+          p.mj = p.mj || el.joined;
+          continue;
+        }
+        if (el.c === p.c && el.v === p.v && el.j === p.j){
+          p.b = el.b;
+          p.mj = p.mj || el.joined;
+          continue;
+        }
+      }
+      list.push(el);
+    }
+    let skel = '';
+    const offs = [];
+    for (const el of list){
+      offs.push(skel.length);
+      skel += el ? el.c + el.v + el.j + '|' : '#|';
+    }
+    return {skel, offs, list};
+  }
+
+  const esc = s => s.replace(/\|/g, '\\|');
+  const skelOf = w => toSkeleton(w).skel;
+  const STRONG_RE = (() => {
+    const parts = STRONG_WORDS.map(w => {
+      const ex = STRONG_EXCEPT[w];
+      return esc(skelOf(w)) + (ex ? '(?!' + ex.map(x => esc(skelOf(x))).join('|') + ')' : '');
+    });
+    parts.sort((x, y) => y.length - x.length);
+    parts.push('[ㅂㅃ](?![ㅗㅛ])[ㅏ-ㅣ]ㅇ\\|[ㅅㅆ]ㅣㄴ\\|(?!ㄴㅕㄴ\\|)');
+    return new RegExp('(?<![^|])(?:' + parts.join('|') + ')', 'g');
+  })();
+
+  function detectStrong(text){
+    const {skel, offs, list} = toSkeleton(text);
+    const found = [];
+    for (const m of skel.matchAll(STRONG_RE)){
+      const e1 = offs.indexOf(m.index);
+      if (e1 < 0) continue;
+      const next = offs.indexOf(m.index + m[0].length);
+      const e2 = next < 0 ? list.length - 1 : next - 1;
+      let spanned = false;
+      for (let e = e1; e <= e2; e++){
+        if (list[e].mj || (e > e1 && list[e].joined)) spanned = true;
+      }
+      if (spanned){
+        const nx = list[e2 + 1];
+        if (nx && !nx.gapBefore) continue;
+      }
+      found.push({index: list[e1].a, length: list[e2].b - list[e1].a});
+    }
+    return found;
+  }
+
+  function findProfanity(text, ver){
+    if (ver >= 1.5) return detectStrong(text);
+    return [...text.matchAll(PROFANITY)].map(m => ({index: m.index, length: m[0].length}));
+  }
+
+  function buildQueue(text, ver, punctOn, bleep){
+    if (!bleep) return buildSegment(text, ver, punctOn);
+    const q = [];
+    let last = 0;
+    for (const m of findProfanity(text, ver)){
+      q.push(...buildSegment(text.slice(last, m.index), ver, punctOn));
+      q.push('BEEP');
+      last = m.index + m.length;
+    }
+    q.push(...buildSegment(text.slice(last), ver, punctOn));
+    return q;
+  }
+
+  function buildSegment(text, ver, punctOn){
     const q = [];
     const parts = text.match(/[A-Za-z]+|[\s\S]/gu) || [];
-    for (const p of parts){
+    parts.forEach((p, n) => {
       if (/^[A-Za-z]+$/.test(p)){
-        if (v12) q.push(...englishKeys(p));
-        continue;
+        if (ver >= 1.2) q.push(...englishKeys(p));
+        return;
       }
       const code = p.charCodeAt(0);
       if (code >= 0xAC00 && code <= 0xD7A3){
         pushSyllable(p, q);
-      } else if (v12 && code >= 48 && code <= 57){
+      } else if (ver >= 1.2 && code >= 48 && code <= 57){
         pushSyllable(DIGITS[code - 48], q);
       } else if (JUNG_MAP[p]){
         q.push(...JUNG_MAP[p]);
@@ -188,9 +399,33 @@
         q.push(2);
       } else if (/\s/.test(p)){
         q.push(1);
+      } else if (ver >= 1.3){
+        const mark = PUNCT_ALIAS[p] || p;
+        if (PUNCT_NAME[mark]){
+          if (!punctOn) return;
+          const prev = n > 0 ? parts[n - 1] : '';
+          const name = mark === '.' && /^[0-9]$/.test(prev) ? '쩜' : PUNCT_NAME[mark];
+          q.push(0.5);
+          pushText(name, q);
+          q.push(0.5);
+        } else if (/[\p{P}\p{S}]/u.test(p)){
+          q.push(0.5);
+          pushText(UNKNOWN, q);
+          q.push(0.5);
+        }
       }
-    }
+    });
     return q;
+  }
+
+  function applySpeed(q, mode){
+    if (mode !== 'vslow' && mode !== 'slow') return q;
+    const out = [];
+    for (const it of q){
+      out.push(it);
+      if (typeof it === 'string' && it !== 'BEEP' && (mode === 'vslow' || CONSONANTS.has(it))) out.push(it);
+    }
+    return out;
   }
 
   function merge(q, sr){
@@ -209,6 +444,20 @@
     for (const p of parts){
       if (typeof p === 'number') pos += p;
       else { out.set(p, pos); pos += p.length; }
+    }
+    return out;
+  }
+
+  function resample(data, rate){
+    const n = Math.floor(data.length / rate);
+    const out = new Float32Array(n);
+    for (let i = 0; i < n; i++){
+      const pos = i * rate;
+      const j = Math.floor(pos);
+      const f = pos - j;
+      const a = data[j];
+      const b = j + 1 < data.length ? data[j + 1] : a;
+      out[i] = a + (b - a) * f;
     }
     return out;
   }
@@ -232,7 +481,12 @@
   let lastUrl = null;
   gen.addEventListener('click', async () => {
     if (failed) return;
-    const q = buildQueue($('text').value, model.value === '1.2');
+    const ver = parseFloat(model.value);
+    const punctOn = $('punct').checked;
+    const mode = ver >= 1.3 ? speed.value : 'normal';
+
+    const bleep = ver >= 1.4 && $('prof').checked;
+    const q = applySpeed(buildQueue($('text').value, ver, punctOn, bleep), mode);
     if (!q.some(i => typeof i === 'string')) return;
 
     gen.disabled = true;
@@ -243,10 +497,21 @@
 
     await loading;
     if (failed) return;
+    await beepLoading;
+    if (q.includes('BEEP') && !raw.BEEP){
+      msg.className = 'err';
+      msg.textContent = ERR;
+      gen.disabled = false;
+      return;
+    }
     await new Promise(r => setTimeout(r, 500));
 
     const sr = ctx.sampleRate;
-    const blob = encodeWav(merge(q, sr), sr);
+    let samples = merge(q, sr);
+    if (mode === 'fast') samples = resample(samples, 1.5);
+    if (mode === 'vfast') samples = resample(samples, 2);
+
+    const blob = encodeWav(samples, sr);
     if (lastUrl) URL.revokeObjectURL(lastUrl);
     lastUrl = URL.createObjectURL(blob);
     player.src = lastUrl;
