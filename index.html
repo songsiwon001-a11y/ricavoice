@@ -24,6 +24,8 @@
   button:disabled{opacity:.45;cursor:not-allowed}
   button.gear{padding:7px 12px;font-size:18px;line-height:1;background:#2b2639;color:var(--fg);border:1px solid var(--line);border-radius:10px}
   .btn.sec{background:#2b2639;color:var(--fg);border:1px solid var(--line)}
+  button.info{padding:8px 12px;font-size:13px;white-space:nowrap;background:#2b2639;color:var(--fg);border:1px solid var(--line);border-radius:10px;font-weight:600}
+  .infobox{background:#15131c;border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin-bottom:12px;font-size:14px;line-height:1.6}
   .settings{background:#15131c;border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:12px}
   .settings .grp{font-size:13px;color:var(--sub);margin:0 0 8px}
   .switchrow{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;font-size:15px}
@@ -50,14 +52,17 @@
     <div class="model">
       <label for="model">모델</label>
       <select id="model">
-        <option value="1.5" selected>rica1.5</option>
+        <option value="1.6" selected>rica1.6</option>
+        <option value="1.5">rica1.5</option>
         <option value="1.4">rica1.4</option>
         <option value="1.3">rica1.3</option>
         <option value="1.2">rica1.2</option>
         <option value="1.1">rica1.1</option>
       </select>
+      <button id="info" class="info" type="button">모델 설명</button>
       <button id="gear" class="gear" type="button" aria-label="설정">⚙</button>
     </div>
+    <div id="modelInfo" class="infobox" style="display:none"></div>
     <div id="settings" class="settings" style="display:none">
       <div class="switchrow">
         <span>구두점 발음</span>
@@ -66,6 +71,10 @@
       <div class="switchrow" id="profRow" style="display:none">
         <span>욕설 삐처리</span>
         <label class="switch"><input type="checkbox" id="prof"><span class="slider"></span></label>
+      </div>
+      <div class="switchrow" id="numRow" style="display:none">
+        <span>숫자 모아 읽기</span>
+        <label class="switch"><input type="checkbox" id="gather"><span class="slider"></span></label>
       </div>
       <p class="grp">음성 속도</p>
       <select id="speed">
@@ -128,6 +137,24 @@
   const $ = id => document.getElementById(id);
   const msg = $('msg'), gen = $('gen'), result = $('result'), player = $('player'), dl = $('dl');
   const model = $('model'), gear = $('gear'), settings = $('settings'), speed = $('speed');
+  const infoBtn = $('info'), infoBox = $('modelInfo');
+  const DESC = {
+    '1.1': 'srjs가 만든 최초로 한국어 텍스트를 발음할 수 있는 음성 합성 모델입니다. 아직 영어, 숫자 등 기호는 발음하지 못합니다.(rica1은 rice timer 맞춤형 숫자 읽기 ai)',
+    '1.2': 'rica 1.2는 처음으로 영문 및 숫자 발음을 지원합니다.',
+    '1.3': 'rica 1.3은 구두점을 읽을 수 있으며, 다양한 속도로 말할 수 있습니다.',
+    '1.4': '욕설을 자동으로 보고 삐처리할 수 있습니다.',
+    '1.5': '보다 더 강력해진 욕설 필터를 내장하고 있습니다.',
+    '1.6': 'rica 1.6은 영어 욕설도 삐처리할 수 있으며, 숫자를 모아서 읽을 수 있습니다.'
+  };
+  const showInfo = () => { infoBox.textContent = DESC[model.value] || ''; };
+  infoBtn.addEventListener('click', () => {
+    if (infoBox.style.display === 'none'){
+      showInfo();
+      infoBox.style.display = 'block';
+    } else {
+      infoBox.style.display = 'none';
+    }
+  });
   const AC = window.AudioContext || window.webkitAudioContext;
   const raw = {};
   let ctx = null, failed = false;
@@ -179,9 +206,13 @@
     const hasSettings = parseFloat(model.value) >= 1.3;
     gear.style.display = hasSettings ? '' : 'none';
     $('profRow').style.display = parseFloat(model.value) >= 1.4 ? '' : 'none';
+    $('numRow').style.display = parseFloat(model.value) >= 1.6 ? '' : 'none';
     if (!hasSettings) settings.style.display = 'none';
   }
-  model.addEventListener('change', syncModel);
+  model.addEventListener('change', () => {
+    syncModel();
+    if (infoBox.style.display !== 'none') showInfo();
+  });
   gear.addEventListener('click', () => {
     settings.style.display = settings.style.display === 'none' ? 'block' : 'none';
   });
@@ -360,27 +391,83 @@
     return found;
   }
 
+  const EN_BASE = ['fuck','fuk','fck','fvck','phuck','fuc','shit','sht','shet','shyt','shite','bitch','biatch','bastard','asshole','ass','dick','cunt','pussy','whore','slut','wtf','stfu'];
+  const EN_PRE = 'mother|dumb|jack|bull|horse|dip|holy|fat|lazy|smart|bad';
+  const EN_SUF = 's|es|ed|er|ers|ing|in|y|ie|head|heads|face|hole|holes|wit|up|off';
+
+  function letterPattern(word){
+    let out = '', i = 0;
+    while (i < word.length){
+      let j = i;
+      while (j < word.length && word[j] === word[i]) j++;
+      const c = 'aeiou'.includes(word[i]) ? '[' + word[i] + '*]' : word[i];
+      out += c + (j - i > 1 ? '{' + (j - i) + ',}' : '+');
+      i = j;
+    }
+    return out;
+  }
+
+  const EN_RE = new RegExp('^(?:' + EN_PRE + ')?(?:' + EN_BASE.map(letterPattern).join('|') + ')(?:' + EN_SUF + ')?$');
+
+  function detectEnglish(text){
+    const found = [];
+    for (const m of text.matchAll(/(?<![A-Za-z0-9])[A-Za-z@$][A-Za-z@$*01345]*/g)){
+      const tok = m[0].replace(/\*+$/, '');
+      const norm = tok.toLowerCase().replace(/@/g, 'a').replace(/\$/g, 's').replace(/0/g, 'o').replace(/1/g, 'i').replace(/3/g, 'e').replace(/4/g, 'a').replace(/5/g, 's');
+      if (EN_RE.test(norm)) found.push({index: m.index, length: tok.length});
+    }
+    return found;
+  }
+
+  function readNumber(raw){
+    const d = raw.replace(/,/g, '');
+    if (d.length > 16 || (d.length > 1 && d[0] === '0')) return [...d].map(c => DIGITS[+c]).join('');
+    if (/^0+$/.test(d)) return DIGITS[0];
+    const UNITS = ['', '만', '억', '조'];
+    const SMALL = ['', '십', '백', '천'];
+    const groups = [];
+    for (let i = d.length; i > 0; i -= 4) groups.unshift(d.slice(Math.max(0, i - 4), i));
+    let out = '';
+    groups.forEach((g, gi) => {
+      if (!parseInt(g, 10)) return;
+      let s = '';
+      [...g].forEach((c, ci) => {
+        const n = +c;
+        if (!n) return;
+        const pos = g.length - 1 - ci;
+        s += (n === 1 && pos > 0 ? '' : DIGITS[n]) + SMALL[pos];
+      });
+      const unit = UNITS[groups.length - 1 - gi];
+      if (unit === '만' && s === '일') s = '';
+      out += s + unit;
+    });
+    return out;
+  }
+
   function findProfanity(text, ver){
+    if (ver >= 1.6) return detectStrong(text).concat(detectEnglish(text)).sort((x, y) => x.index - y.index);
     if (ver >= 1.5) return detectStrong(text);
     return [...text.matchAll(PROFANITY)].map(m => ({index: m.index, length: m[0].length}));
   }
 
-  function buildQueue(text, ver, punctOn, bleep){
-    if (!bleep) return buildSegment(text, ver, punctOn);
+  function buildQueue(text, ver, punctOn, bleep, gather){
+    if (!bleep) return buildSegment(text, ver, punctOn, gather);
     const q = [];
     let last = 0;
     for (const m of findProfanity(text, ver)){
-      q.push(...buildSegment(text.slice(last, m.index), ver, punctOn));
+      if (m.index < last) continue;
+      q.push(...buildSegment(text.slice(last, m.index), ver, punctOn, gather));
       q.push('BEEP');
       last = m.index + m.length;
     }
-    q.push(...buildSegment(text.slice(last), ver, punctOn));
+    q.push(...buildSegment(text.slice(last), ver, punctOn, gather));
     return q;
   }
 
-  function buildSegment(text, ver, punctOn){
+  function buildSegment(text, ver, punctOn, gather){
     const q = [];
-    const parts = text.match(/[A-Za-z]+|[\s\S]/gu) || [];
+    const re = gather ? /[A-Za-z]+|\d{1,3}(?:,\d{3})+|\d+|[\s\S]/gu : /[A-Za-z]+|[\s\S]/gu;
+    const parts = text.match(re) || [];
     parts.forEach((p, n) => {
       if (/^[A-Za-z]+$/.test(p)){
         if (ver >= 1.2) q.push(...englishKeys(p));
@@ -389,6 +476,9 @@
       const code = p.charCodeAt(0);
       if (code >= 0xAC00 && code <= 0xD7A3){
         pushSyllable(p, q);
+      } else if (gather && /^\d/.test(p)){
+        const decimal = n >= 2 && parts[n - 1] === '.' && /\d$/.test(parts[n - 2]);
+        pushText(decimal ? [...p].filter(c => /\d/.test(c)).map(c => DIGITS[+c]).join('') : readNumber(p), q);
       } else if (ver >= 1.2 && code >= 48 && code <= 57){
         pushSyllable(DIGITS[code - 48], q);
       } else if (JUNG_MAP[p]){
@@ -404,7 +494,7 @@
         if (PUNCT_NAME[mark]){
           if (!punctOn) return;
           const prev = n > 0 ? parts[n - 1] : '';
-          const name = mark === '.' && /^[0-9]$/.test(prev) ? '쩜' : PUNCT_NAME[mark];
+          const name = mark === '.' && /[0-9]$/.test(prev) ? '쩜' : PUNCT_NAME[mark];
           q.push(0.5);
           pushText(name, q);
           q.push(0.5);
@@ -513,7 +603,8 @@
     const mode = ver >= 1.3 ? speed.value : 'normal';
 
     const bleep = ver >= 1.4 && $('prof').checked;
-    const q = applySpeed(buildQueue($('text').value, ver, punctOn, bleep), mode);
+    const gather = ver >= 1.6 && $('gather').checked;
+    const q = applySpeed(buildQueue($('text').value, ver, punctOn, bleep, gather), mode);
     if (!q.some(i => typeof i === 'string')) return;
 
     gen.disabled = true;
