@@ -225,7 +225,7 @@
   function ensureSpecial(){
     if (!specialPromise){
       specialPromise = Promise.all(VOWEL_KEYS.map(async k => {
-        raw8[k] = await loadWav(encodeURIComponent(k + SPECIAL_TAG) + '.wav');
+        raw8[k] = await loadWav(encodeURIComponent(k + SPECIAL_TAG) + '.mp3');
       })).then(() => true, () => {
         specialPromise = null;
         return false;
