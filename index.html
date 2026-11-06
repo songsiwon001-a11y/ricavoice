@@ -28,6 +28,8 @@
   .infobox{background:#15131c;border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin-bottom:12px;font-size:14px;line-height:1.6}
   .settings{background:#15131c;border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:12px}
   .settings .grp{font-size:13px;color:var(--sub);margin:0 0 8px}
+  .field{margin-bottom:14px}
+  .settings input[type=range]{width:100%;accent-color:var(--accent);margin:0}
   .switchrow{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;font-size:15px}
   .switch{position:relative;width:46px;height:26px;display:inline-block}
   .switch input{opacity:0;width:0;height:0}
@@ -52,7 +54,8 @@
     <div class="model">
       <label for="model">모델</label>
       <select id="model">
-        <option value="1.7" selected>rica1.7</option>
+        <option value="1.8" selected>rica1.8</option>
+        <option value="1.7">rica1.7</option>
         <option value="1.6">rica1.6</option>
         <option value="1.5">rica1.5</option>
         <option value="1.4">rica1.4</option>
@@ -78,6 +81,19 @@
         <span>숫자 모아 읽기</span>
         <label class="switch"><input type="checkbox" id="gather"><span class="slider"></span></label>
       </div>
+      <div class="field" id="voiceRow" style="display:none">
+        <p class="grp">음성 종류</p>
+        <select id="voice">
+          <option value="normal" selected>일반</option>
+          <option value="natural">더 자연스러움</option>
+          <option value="whisper">소곤거림</option>
+        </select>
+      </div>
+      <div class="field" id="pitchRow" style="display:none">
+        <p class="grp">음성 고저 <span id="pitchVal">30%</span></p>
+        <input type="range" id="pitch" min="0" max="100" step="1" value="30">
+      </div>
+      <div id="speedSel">
       <p class="grp">음성 속도</p>
       <select id="speed">
         <option value="vslow">매우 느림</option>
@@ -86,6 +102,11 @@
         <option value="fast">빠름</option>
         <option value="vfast">매우 빠름</option>
       </select>
+      </div>
+      <div class="field" id="speedRange" style="display:none;margin-bottom:0">
+        <p class="grp">음성 속도 <span id="speedVal">50%</span></p>
+        <input type="range" id="speedPct" min="0" max="100" step="1" value="50">
+      </div>
     </div>
     <textarea id="text" placeholder="텍스트를 입력하세요"></textarea>
     <button id="gen">생성</button>
@@ -138,6 +159,13 @@
   const PUNCT_ALIAS ={'’':"'",'‘':"'",'“':'"','”':'"'};
   const UNKNOWN = '알 수 없는 문자';
   const GAP_MS = 180;
+  const VOWEL_KEYS = [...'ㅏㅓㅗㅜㅡㅣㅐㅔ'];
+  const VOWELS = new Set(VOWEL_KEYS);
+  const SPECIAL_TAG = '(+rica1.8)';
+  const L_MAX = 0.03;
+  const L_MIN = 0.0001;
+  const HOLD_MIN = 0.012;
+  const HOLD_PERIODS = 4;
   const ERR = '현재 음성 합성 모델에 오류가 발생했습니다.';
 
   const $ = id => document.getElementById(id);
@@ -152,7 +180,8 @@
     '1.4': '욕설을 자동으로 보고 삐처리할 수 있습니다.',
     '1.5': '보다 더 강력해진 욕설 필터를 내장하고 있습니다.',
     '1.6': 'rica 1.6은 영어 욕설도 삐처리할 수 있으며, 숫자를 모아서 읽을 수 있습니다.',
-    '1.7': 'rica 1.7은 기존에 구두점 발음 설정을 꺼도 알 수 없는 기호가 나오면 "알 수 없는 문자"를 계속 발음하던 버그를 수정하였으며, 더 많은 구두점을 발음할 수 있습니다.'
+    '1.7': 'rica 1.7은 기존에 구두점 발음 설정을 꺼도 알 수 없는 기호가 나오면 "알 수 없는 문자"를 계속 발음하던 버그를 수정하였으며, 더 많은 구두점을 발음할 수 있습니다.',
+    '1.8': 'rica 1.8은 음성 종류를 고를 수 있으며, 더 자연스러운 억양으로 말하거나 소곤거리는 목소리로 말할 수 있습니다.'
   };
   const showInfo = () => { infoBox.textContent = DESC[model.value] || ''; };
   infoBtn.addEventListener('click', () => {
@@ -167,23 +196,42 @@
   const raw = {};
   let ctx = null, failed = false;
 
+  const raw8 = {};
+  let specialPromise = null;
+
+  async function loadWav(url){
+    const r = await fetch(url);
+    if (!r.ok) throw new Error(url);
+    const ab = await ctx.decodeAudioData(await r.arrayBuffer());
+    const mono = new Float32Array(ab.length);
+    for (let c = 0; c < ab.numberOfChannels; c++){
+      const d = ab.getChannelData(c);
+      for (let i = 0; i < d.length; i++) mono[i] += d[i] / ab.numberOfChannels;
+    }
+    const thr = 0.006;
+    let s = 0, e = mono.length - 1;
+    while (s < mono.length && Math.abs(mono[s]) < thr) s++;
+    while (e > s && Math.abs(mono[e]) < thr) e--;
+    return mono.subarray(s, e + 1);
+  }
+
   async function loadAll(){
     ctx = new AC();
     await Promise.all(KEYS.map(async k => {
-      const r = await fetch(encodeURIComponent(k) + '.wav');
-      if (!r.ok) throw new Error(k);
-      const ab = await ctx.decodeAudioData(await r.arrayBuffer());
-      const mono = new Float32Array(ab.length);
-      for (let c = 0; c < ab.numberOfChannels; c++){
-        const d = ab.getChannelData(c);
-        for (let i = 0; i < d.length; i++) mono[i] += d[i] / ab.numberOfChannels;
-      }
-      const thr = 0.006;
-      let s = 0, e = mono.length - 1;
-      while (s < mono.length && Math.abs(mono[s]) < thr) s++;
-      while (e > s && Math.abs(mono[e]) < thr) e--;
-      raw[k] = mono.subarray(s, e + 1);
+      raw[k] = await loadWav(encodeURIComponent(k) + '.wav');
     }));
+  }
+
+  function ensureSpecial(){
+    if (!specialPromise){
+      specialPromise = Promise.all(VOWEL_KEYS.map(async k => {
+        raw8[k] = await loadWav(encodeURIComponent(k + SPECIAL_TAG) + '.wav');
+      })).then(() => true, () => {
+        specialPromise = null;
+        return false;
+      });
+    }
+    return specialPromise;
   }
 
   const loading = loadAll().catch(() => {
@@ -213,6 +261,13 @@
     gear.style.display = hasSettings ? '' : 'none';
     $('profRow').style.display = parseFloat(model.value) >= 1.4 ? '' : 'none';
     $('numRow').style.display = parseFloat(model.value) >= 1.6 ? '' : 'none';
+    const v18 = parseFloat(model.value) >= 1.8;
+    const vt = $('voice').value;
+    $('voiceRow').style.display = v18 ? '' : 'none';
+    $('pitchRow').style.display = v18 && vt === 'natural' ? '' : 'none';
+    $('speedSel').style.display = v18 ? 'none' : '';
+    $('speedRange').style.display = v18 ? '' : 'none';
+    if (v18 && vt !== 'normal') ensureSpecial();
     if (!hasSettings) settings.style.display = 'none';
     if (failed){
       const dev = model.value === 'device';
@@ -230,22 +285,30 @@
   gear.addEventListener('click', () => {
     settings.style.display = settings.style.display === 'none' ? 'block' : 'none';
   });
+  $('voice').addEventListener('change', syncModel);
+  $('pitch').addEventListener('input', () => {
+    $('pitchVal').textContent = $('pitch').value + '%';
+  });
+  $('speedPct').addEventListener('input', () => {
+    $('speedVal').textContent = $('speedPct').value + '%';
+  });
   syncModel();
 
-  function pushSyllable(ch, q){
+  function pushSyllable(ch, q, mk){
     const idx = ch.charCodeAt(0) - 0xAC00;
     const cho = CHO[Math.floor(idx / 588)];
     const jung = JUNG[Math.floor((idx % 588) / 28)];
     const jong = JONG[idx % 28];
+    if (mk) q.push({m: 'syl'});
     if (cho !== 'ㅇ') q.push(CHO_MAP[cho] || cho);
     q.push(...JUNG_MAP[jung]);
     if (jong) q.push(...(JONG_MAP[jong] || [jong]));
   }
 
-  function pushText(str, q){
+  function pushText(str, q, mk){
     for (const ch of str){
       const c = ch.charCodeAt(0);
-      if (c >= 0xAC00 && c <= 0xD7A3) pushSyllable(ch, q);
+      if (c >= 0xAC00 && c <= 0xD7A3) pushSyllable(ch, q, mk);
       else if (/\s/.test(ch)) q.push(1);
     }
   }
@@ -482,6 +545,7 @@
     const q = [];
     const re = gather ? /[A-Za-z]+|\d{1,3}(?:,\d{3})+|\d+|[\s\S]/gu : /[A-Za-z]+|[\s\S]/gu;
     const parts = text.match(re) || [];
+    const mk = ver >= 1.8;
     parts.forEach((p, n) => {
       if (/^[A-Za-z]+$/.test(p)){
         if (ver >= 1.2) q.push(...englishKeys(p));
@@ -489,12 +553,12 @@
       }
       const code = p.charCodeAt(0);
       if (code >= 0xAC00 && code <= 0xD7A3){
-        pushSyllable(p, q);
+        pushSyllable(p, q, mk);
       } else if (gather && /^\d/.test(p)){
         const decimal = n >= 2 && parts[n - 1] === '.' && /\d$/.test(parts[n - 2]);
-        pushText(decimal ? [...p].filter(c => /\d/.test(c)).map(c => DIGITS[+c]).join('') : readNumber(p), q);
+        pushText(decimal ? [...p].filter(c => /\d/.test(c)).map(c => DIGITS[+c]).join('') : readNumber(p), q, mk);
       } else if (ver >= 1.2 && code >= 48 && code <= 57){
-        pushSyllable(DIGITS[code - 48], q);
+        pushSyllable(DIGITS[code - 48], q, mk);
       } else if (JUNG_MAP[p]){
         q.push(...JUNG_MAP[p]);
       } else if (KEYS.includes(p) || CHO_MAP[p] || JONG_MAP[p]){
@@ -505,18 +569,23 @@
         q.push(1);
       } else if (ver >= 1.3){
         const mark = PUNCT_ALIAS[p] || p;
+        if (mk && '.?!,'.includes(mark)){
+          const prevD = n > 0 && /\d/.test(parts[n - 1]);
+          const nextD = n + 1 < parts.length && /\d/.test(parts[n + 1]);
+          if (!(prevD && nextD)) q.push({m: mark});
+        }
         const names = ver >= 1.7 ? PUNCT_NAME_17 : PUNCT_NAME;
         if (names[mark]){
           if (!punctOn) return;
           const prev = n > 0 ? parts[n - 1] : '';
           const name = mark === '.' && /[0-9]$/.test(prev) ? '쩜' : names[mark];
           q.push(0.5);
-          pushText(name, q);
+          pushText(name, q, mk);
           q.push(0.5);
         } else if (/[\p{P}\p{S}]/u.test(p)){
           if (ver >= 1.7 && !punctOn) return;
           q.push(0.5);
-          pushText(UNKNOWN, q);
+          pushText(UNKNOWN, q, mk);
           q.push(0.5);
         }
       }
@@ -524,25 +593,50 @@
     return q;
   }
 
-  function applySpeed(q, mode){
+  function applySpeed(q, mode, natural){
     if (mode !== 'vslow' && mode !== 'slow') return q;
     const out = [];
     for (const it of q){
+      if (natural && typeof it === 'string' && VOWELS.has(it)){
+        out.push(mode === 'vslow' ? {v: it, d: 2} : it);
+        continue;
+      }
       out.push(it);
       if (typeof it === 'string' && it !== 'BEEP' && (mode === 'vslow' || CONSONANTS.has(it))) out.push(it);
     }
     return out;
   }
 
-  function merge(q, sr){
+  function repeatPieces(q, cRep, vRep, natural){
+    if (cRep === 1 && vRep === 1) return q;
+    const out = [];
+    for (const it of q){
+      if (typeof it !== 'string' || it === 'BEEP'){
+        out.push(it);
+        continue;
+      }
+      if (VOWELS.has(it)){
+        if (natural) out.push(vRep > 1 ? {v: it, d: vRep} : it);
+        else for (let i = 0; i < vRep; i++) out.push(it);
+      } else {
+        for (let i = 0; i < cRep; i++) out.push(it);
+      }
+    }
+    return out;
+  }
+
+  function merge(q, sr, whisper){
     const parts = [];
     let total = 0;
     for (const it of q){
       if (typeof it === 'number'){
         const n = Math.round(sr * GAP_MS / 1000 * it);
         parts.push(n); total += n;
-      } else if (raw[it]){
-        parts.push(raw[it]); total += raw[it].length;
+      } else if (typeof it === 'string'){
+        const buf = whisper && VOWELS.has(it) ? raw8[it] : raw[it];
+        if (buf){
+          parts.push(buf); total += buf.length;
+        }
       }
     }
     const out = new Float32Array(total);
@@ -554,10 +648,166 @@
     return out;
   }
 
+  function synthVowel(V, d, tot, off, e, level, sr, rnd){
+    const N = V.length;
+    const len = Math.max(1, Math.round(N * d));
+    const out = new Float32Array(len);
+    const lo = L_MIN * sr, hi = L_MAX * sr;
+    const base = L_MAX * Math.pow(L_MIN / L_MAX, level) * sr;
+    const period = t => {
+      const u = tot > 0 ? (off + t) / tot : 0;
+      const st = e.s0 + (e.s1 - e.s0) * u;
+      const p = base * Math.pow(2, -st / 12) * (1 + 0.012 * (rnd() - 0.5));
+      return Math.min(hi, Math.max(lo, p)) || lo;
+    };
+    const marks = [0];
+    const centers = [];
+    let t = 0, frameEnd = 0, pc = 0;
+    while (t < len + 1){
+      if (t >= frameEnd){
+        const hold = Math.max(HOLD_MIN * sr, HOLD_PERIODS * period(t));
+        pc = Math.min(N - 1, Math.max(0, (t + hold / 2) / d));
+        frameEnd = t + hold;
+      }
+      centers.push(pc);
+      t += period(t);
+      marks.push(t);
+    }
+    for (let k = 0; k < centers.length; k++){
+      const tk = marks[k];
+      const left = k > 0 ? marks[k - 1] : tk;
+      const right = marks[k + 1];
+      const from = k > 0 ? Math.ceil(left) : 0;
+      const to = Math.min(len - 1, Math.floor(right));
+      for (let n = from; n <= to; n++){
+        const w = n < tk
+          ? 0.5 - 0.5 * Math.cos(Math.PI * (n - left) / (tk - left))
+          : 0.5 + 0.5 * Math.cos(Math.PI * (n - tk) / (right - tk));
+        const pos = centers[k] + (n - tk);
+        const i0 = Math.floor(pos);
+        const f = pos - i0;
+        const a = i0 >= 0 && i0 < N ? V[i0] : 0;
+        const b = i0 + 1 >= 0 && i0 + 1 < N ? V[i0 + 1] : 0;
+        out[n] += w * (a + (b - a) * f);
+      }
+    }
+    const fade = Math.min(Math.round(0.002 * sr), len >> 2);
+    for (let i = 0; i < fade; i++){
+      const g = 0.5 - 0.5 * Math.cos(Math.PI * i / fade);
+      out[i] *= g;
+      out[len - 1 - i] *= g;
+    }
+    let so = 0, sv = 0;
+    for (let i = 0; i < len; i++) so += out[i] * out[i];
+    for (let i = 0; i < N; i++) sv += V[i] * V[i];
+    const ro = Math.sqrt(so / len), rv = Math.sqrt(sv / N);
+    if (ro > 1e-6 && rv > 0){
+      const g = Math.min(4, Math.max(0.25, rv / ro));
+      for (let i = 0; i < len; i++) out[i] *= g;
+    }
+    return out;
+  }
+
+  function mergeNatural(q, sr, level){
+    let seed = 20261107;
+    const rnd = () => (seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0) / 4294967296;
+    const events = [];
+    let nuc = null;
+    for (const it of q){
+      let v = null;
+      if (typeof it === 'string'){
+        if (VOWELS.has(it)) v = {k: it, d: 1};
+      } else if (it && it.v){
+        v = {k: it.v, d: it.d};
+      }
+      if (v){
+        if (!nuc){
+          nuc = {t: 'n', segs: []};
+          events.push(nuc);
+        }
+        nuc.segs.push(v);
+        continue;
+      }
+      nuc = null;
+      if (it && it.m === 'syl') continue;
+      if (typeof it === 'number') events.push({t: 'p', n: it});
+      else if (it && it.m) events.push({t: 'm', m: it.m});
+      else events.push({t: 'r', k: it});
+    }
+
+    const lens = [];
+    let phrase = [], wid = 0, j = 0;
+    const finish = type => {
+      const m = phrase.length;
+      let prev = 0;
+      phrase.forEach((e, i) => {
+        const decl = type === 'q' ? -Math.min(0.12 * i, 1.4) : -Math.min(0.22 * i, 2.6);
+        let acc = 0;
+        if (e.j === 0) acc = lens[e.wid] > 1 ? -0.5 : 0;
+        else if (e.j === 1) acc = 1.2;
+        else if (e.j === 2) acc = 0.6;
+        const target = decl + acc;
+        e.s0 = i === 0 ? target : prev;
+        let end = target;
+        if (i === m - 1) end += type === 'q' ? 5.5 : type === 'c' ? 1.2 : -3;
+        else if (type === 'q' && i === m - 2) end += 1;
+        e.s1 = end;
+        prev = end;
+      });
+      phrase = [];
+    };
+    for (const e of events){
+      if (e.t === 'n'){
+        e.wid = wid;
+        e.j = j++;
+        lens[wid] = (lens[wid] || 0) + 1;
+        phrase.push(e);
+      } else if (e.t === 'p'){
+        if (j > 0){ wid++; j = 0; }
+        if (e.n >= 2 && phrase.length) finish('d');
+      } else if (e.t === 'm'){
+        if (j > 0){ wid++; j = 0; }
+        if (phrase.length) finish(e.m === '?' ? 'q' : e.m === ',' ? 'c' : 'd');
+      }
+    }
+    if (phrase.length) finish('d');
+
+    const chunks = [];
+    let total = 0;
+    const add = a => { chunks.push(a); total += a.length; };
+    for (const e of events){
+      if (e.t === 'n'){
+        let tot = 0;
+        for (const s of e.segs) if (raw8[s.k]) tot += raw8[s.k].length * s.d;
+        let off = 0;
+        for (const s of e.segs){
+          const V = raw8[s.k];
+          if (!V) continue;
+          add(synthVowel(V, s.d, tot, off, e, level, sr, rnd));
+          off += V.length * s.d;
+        }
+      } else if (e.t === 'p'){
+        add(new Float32Array(Math.round(sr * GAP_MS / 1000 * e.n)));
+      } else if (e.t === 'r' && raw[e.k]){
+        add(raw[e.k]);
+      }
+    }
+    const out = new Float32Array(total);
+    let pos = 0, peak = 0;
+    for (const c of chunks){
+      out.set(c, pos);
+      pos += c.length;
+    }
+    for (let i = 0; i < out.length; i++) peak = Math.max(peak, Math.abs(out[i]));
+    if (peak > 0.98) for (let i = 0; i < out.length; i++) out[i] *= 0.98 / peak;
+    return out;
+  }
+
   function stretch(data, rate){
-    const N = 2048, Hs = N / 2, tol = 512, Ha = Hs * rate;
+    const N = 2048, ov = rate > 2 ? 4 : 2, Hs = N / ov, tol = 512, Ha = Hs * rate;
     const outLen = Math.floor(data.length / rate);
     const out = new Float32Array(outLen + 2 * N);
+    const acc = new Float32Array(outLen + 2 * N);
     const win = new Float32Array(N);
     for (let i = 0; i < N; i++) win[i] = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / N);
     const at = x => (x >= 0 && x < data.length ? data[x] : 0);
@@ -589,9 +839,11 @@
       for (let i = 0; i < N; i++){
         const w = k === 0 && i < Hs ? 1 : win[i];
         out[base + i] += at(best + i) * w;
+        acc[base + i] += w;
       }
       prev = best;
     }
+    for (let i = 0; i < outLen; i++) if (acc[i] > 1e-3) out[i] /= acc[i];
     return out.subarray(0, outLen);
   }
 
@@ -643,8 +895,22 @@
 
     const bleep = ver >= 1.4 && $('prof').checked;
     const gather = ver >= 1.6 && $('gather').checked;
-    const q = applySpeed(buildQueue($('text').value, ver, punctOn, bleep, gather), mode);
-    if (!q.some(i => typeof i === 'string')) return;
+    const voice = ver >= 1.8 ? $('voice').value : 'normal';
+    const natural = voice === 'natural';
+    const base = buildQueue($('text').value, ver, punctOn, bleep, gather);
+    let cRep = 1, vRep = 1, rate = 1;
+    if (ver >= 1.8){
+      const pct = Math.min(100, Math.max(0, parseInt($('speedPct').value, 10) || 0));
+      if (pct < 50){
+        const step = 50 - pct;
+        cRep = 1 + Math.ceil(step / 2);
+        vRep = 1 + Math.floor(step / 2);
+      } else if (pct > 50){
+        rate = 1 + (pct - 50) * 3 / 50;
+      }
+    }
+    const q = ver >= 1.8 ? repeatPieces(base, cRep, vRep, natural) : applySpeed(base, mode, natural);
+    if (!q.some(i => typeof i === 'string' || (i && i.v))) return;
 
     gen.disabled = true;
     result.style.display = 'none';
@@ -661,12 +927,26 @@
       gen.disabled = false;
       return;
     }
+    if (voice !== 'normal'){
+      const ok = await ensureSpecial();
+      if (!ok){
+        msg.className = 'err';
+        msg.textContent = ERR;
+        gen.disabled = false;
+        return;
+      }
+    }
     await new Promise(r => setTimeout(r, 500));
 
     const sr = ctx.sampleRate;
-    let samples = merge(q, sr);
-    if (mode === 'fast') samples = stretch(samples, 1.5);
-    if (mode === 'vfast') samples = stretch(samples, 2);
+    const level = Math.min(1, Math.max(0, (parseFloat($('pitch').value) || 0) / 100));
+    let samples = natural ? mergeNatural(q, sr, level) : merge(q, sr, voice === 'whisper');
+    if (ver >= 1.8){
+      if (rate > 1.001) samples = stretch(samples, rate);
+    } else {
+      if (mode === 'fast') samples = stretch(samples, 1.5);
+      if (mode === 'vfast') samples = stretch(samples, 2);
+    }
 
     const blob = encodeWav(samples, sr);
     if (lastUrl) URL.revokeObjectURL(lastUrl);
