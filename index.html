@@ -54,6 +54,7 @@
     <div class="model">
       <label for="model">모델</label>
       <select id="model">
+        <option value="music">rica music</option>
         <option value="1.8" selected>rica1.8</option>
         <option value="1.7">rica1.7</option>
         <option value="1.6">rica1.6</option>
@@ -69,6 +70,7 @@
     </div>
     <div id="modelInfo" class="infobox" style="display:none"></div>
     <div id="settings" class="settings" style="display:none">
+      <div id="stdSettings">
       <div class="switchrow">
         <span>구두점 발음</span>
         <label class="switch"><input type="checkbox" id="punct"><span class="slider"></span></label>
@@ -106,6 +108,15 @@
       <div class="field" id="speedRange" style="display:none;margin-bottom:0">
         <p class="grp">음성 속도 <span id="speedVal">50%</span></p>
         <input type="range" id="speedPct" min="0" max="100" step="1" value="50">
+      </div>
+      </div>
+      <div id="musicSettings" style="display:none">
+        <p class="grp">노래</p>
+        <select id="song">
+          <option value="twinkle">반짝반짝 작은별</option>
+          <option value="airplane">떴다 떴다 비행기</option>
+          <option value="daisy">Daisy Bell</option>
+        </select>
       </div>
     </div>
     <textarea id="text" placeholder="텍스트를 입력하세요"></textarea>
@@ -166,6 +177,7 @@
   const L_MIN = 0.0001;
   const HOLD_MIN = 0.012;
   const HOLD_PERIODS = 4;
+  const HOLD_NOTE = 0.12;
   const ERR = '현재 음성 합성 모델에 오류가 발생했습니다.';
 
   const $ = id => document.getElementById(id);
@@ -173,6 +185,7 @@
   const model = $('model'), gear = $('gear'), settings = $('settings'), speed = $('speed');
   const infoBtn = $('info'), infoBox = $('modelInfo');
   const DESC = {
+    'music': '원하는 멜로디로 노래를 부를 수 있습니다.',
     'device': '기기에 내장된 음성 엔진을 사용합니다. 음성 설정은 기기 설정에서 하실 수 있습니다.',
     '1.1': 'srjs가 만든 최초로 한국어 텍스트를 발음할 수 있는 음성 합성 모델입니다. 아직 영어, 숫자 등 기호는 발음하지 못합니다.(rica1은 rice timer 맞춤형 숫자 읽기 ai)',
     '1.2': 'rica 1.2는 처음으로 영문 및 숫자 발음을 지원합니다.',
@@ -257,8 +270,11 @@
   })();
 
   function syncModel(){
-    const hasSettings = parseFloat(model.value) >= 1.3;
+    const music = model.value === 'music';
+    const hasSettings = music || parseFloat(model.value) >= 1.3;
     gear.style.display = hasSettings ? '' : 'none';
+    $('stdSettings').style.display = music ? 'none' : '';
+    $('musicSettings').style.display = music ? '' : 'none';
     $('profRow').style.display = parseFloat(model.value) >= 1.4 ? '' : 'none';
     $('numRow').style.display = parseFloat(model.value) >= 1.6 ? '' : 'none';
     const v18 = parseFloat(model.value) >= 1.8;
@@ -267,7 +283,7 @@
     $('pitchRow').style.display = v18 && vt === 'natural' ? '' : 'none';
     $('speedSel').style.display = v18 ? 'none' : '';
     $('speedRange').style.display = v18 ? '' : 'none';
-    if (v18 && vt !== 'normal') ensureSpecial();
+    if ((v18 && vt !== 'normal') || music) ensureSpecial();
     if (!hasSettings) settings.style.display = 'none';
     if (failed){
       const dev = model.value === 'device';
@@ -280,6 +296,7 @@
   model.addEventListener('change', () => {
     $('prof').checked = parseFloat(model.value) >= 1.7;
     syncModel();
+    if (model.value === 'music') settings.style.display = 'block';
     if (infoBox.style.display !== 'none') showInfo();
   });
   gear.addEventListener('click', () => {
@@ -548,7 +565,10 @@
     const mk = ver >= 1.8;
     parts.forEach((p, n) => {
       if (/^[A-Za-z]+$/.test(p)){
-        if (ver >= 1.2) q.push(...englishKeys(p));
+        if (ver >= 1.2){
+          if (mk) q.push({m: 'free'});
+          q.push(...englishKeys(p));
+        }
         return;
       }
       const code = p.charCodeAt(0);
@@ -560,8 +580,10 @@
       } else if (ver >= 1.2 && code >= 48 && code <= 57){
         pushSyllable(DIGITS[code - 48], q, mk);
       } else if (JUNG_MAP[p]){
+        if (mk) q.push({m: 'free'});
         q.push(...JUNG_MAP[p]);
       } else if (KEYS.includes(p) || CHO_MAP[p] || JONG_MAP[p]){
+        if (mk) q.push({m: 'free'});
         q.push(...(CHO_MAP[p] ? [CHO_MAP[p]] : JONG_MAP[p] || [p]));
       } else if (p === '\n'){
         q.push(2);
@@ -729,7 +751,7 @@
         continue;
       }
       nuc = null;
-      if (it && it.m === 'syl') continue;
+      if (it && (it.m === 'syl' || it.m === 'free')) continue;
       if (typeof it === 'number') events.push({t: 'p', n: it});
       else if (it && it.m) events.push({t: 'm', m: it.m});
       else events.push({t: 'r', k: it});
@@ -798,6 +820,244 @@
       out.set(c, pos);
       pos += c.length;
     }
+    for (let i = 0; i < out.length; i++) peak = Math.max(peak, Math.abs(out[i]));
+    if (peak > 0.98) for (let i = 0; i < out.length; i++) out[i] *= 0.98 / peak;
+    return out;
+  }
+
+  const NOTE_SEMI = {c: 0, d: 2, e: 4, f: 5, g: 7, a: 9, b: 11};
+
+  function parseSong(str){
+    const tk = str.trim().split(/\s+/);
+    const notes = [];
+    for (let i = 0; i + 1 < tk.length; i += 2){
+      const m = /^([a-g])(#?)(\d)$/.exec(tk[i].toLowerCase());
+      if (!m) continue;
+      const midi = 12 * (Number(m[3]) + 1) + NOTE_SEMI[m[1]] + (m[2] ? 1 : 0);
+      notes.push({f: 440 * Math.pow(2, (midi - 69) / 12), d: parseFloat(tk[i + 1])});
+    }
+    return notes;
+  }
+
+  const SONGS = {
+    twinkle: parseSong('c4 0.5 c4 0.5 g4 0.5 g4 0.5 a4 0.5 a4 0.5 g4 1 f4 0.5 f4 0.5 e4 0.5 e4 0.5 d4 0.5 d4 0.5 c4 1 g4 0.5 g4 0.5 f4 0.5 f4 0.5 e4 0.5 e4 0.5 d4 1 g4 0.5 g4 0.5 f4 0.5 f4 0.5 e4 0.5 e4 0.5 d4 1 c4 0.5 c4 0.5 g4 0.5 g4 0.5 a4 0.5 a4 0.5 g4 1 f4 0.5 f4 0.5 e4 0.5 e4 0.5 d4 0.5 d4 0.5 c4 1'),
+    airplane: parseSong('e4 0.5 d4 0.5 c4 0.5 d4 0.5 e4 0.5 e4 0.5 e4 1 d4 0.5 d4 0.5 d4 1 e4 0.5 g4 0.5 g4 1 e4 0.5 d4 0.5 c4 0.5 d4 0.5 e4 0.5 e4 0.5 e4 1 d4 0.5 d4 0.5 e4 0.5 d4 0.5 c4 2'),
+    daisy: parseSong('g4 0.9s e4 0.9s c4 0.9s g3 0.9s a3 0.3s b3 0.3s c4 0.3s a3 0.6s c4 0.3 g3 1.8s d4 0.9s g4 0.9s e4 0.9s c4 0.9s a3 0.3s b3 0.3s c4 0.3s d4 0.6s e4 0.3s d4 1.5s e4 0.3s f4 0.3s e4 0.3s d4 0.3s g4 0.6s e4 0.3s d4 0.3s c4 1.2s d4 0.3s e4 0.6s c4 0.3s a3 0.6s c4 0.3s a3 0.3s g3 1.2s g3 0.3s c4 0.6s e4 0.3s d4 0.6s g3 0.3 c4 0.6s e4 0.3s d4 0.3s e4 0.3s f4 0.3s g4 0.3s e4 0.3s c4 0.3s d4 0.6s g3 0.3s c4 1.8s')
+  };
+
+  function splitSyllable(run){
+    let i = 0;
+    const on = [];
+    while (i < run.length && !VOWELS.has(run[i])) on.push(run[i++]);
+    const nuc = [];
+    while (i < run.length && VOWELS.has(run[i])) nuc.push(run[i++]);
+    const co = run.slice(i).filter(k => !VOWELS.has(k));
+    return {on, nuc: nuc.length ? nuc : ['ㅡ'], co};
+  }
+
+  function groupEnglish(tokens){
+    const n = tokens.length;
+    let i = 0;
+    let on = [];
+    while (i < n && !VOWELS.has(tokens[i])) on.push(tokens[i++]);
+    if (i >= n) return [{on, nuc: ['ㅡ'], co: []}];
+    const out = [];
+    while (i < n){
+      const nuc = [];
+      while (i < n && VOWELS.has(tokens[i])) nuc.push(tokens[i++]);
+      const cons = [];
+      while (i < n && !VOWELS.has(tokens[i])) cons.push(tokens[i++]);
+      let co = [], next = [];
+      if (i >= n) co = cons;
+      else if (cons.length >= 2){
+        co = [cons[0]];
+        next = cons.slice(1);
+      } else next = cons;
+      out.push({on, nuc, co});
+      on = next;
+    }
+    return out;
+  }
+
+  function toSyllables(q){
+    const out = [];
+    let run = [], single = false;
+    const flush = () => {
+      if (run.length){
+        if (single) out.push(splitSyllable(run));
+        else out.push(...groupEnglish(run));
+      }
+      run = [];
+      single = false;
+    };
+    for (const it of q){
+      if (typeof it === 'string' && it !== 'BEEP'){
+        run.push(it);
+        continue;
+      }
+      flush();
+      if (it && it.m === 'syl') single = true;
+    }
+    flush();
+    return out;
+  }
+
+  function join(list){
+    let n = 0;
+    for (const a of list) n += a.length;
+    const out = new Float32Array(n);
+    let p = 0;
+    for (const a of list){
+      out.set(a, p);
+      p += a.length;
+    }
+    return out;
+  }
+
+  function clip(sig, n){
+    const out = sig.slice(0, Math.max(0, n));
+    const f = Math.min(out.length, 220);
+    for (let i = 0; i < f; i++) out[out.length - 1 - i] *= i / f;
+    return out;
+  }
+
+  function sustain(V, len, tOff, Ls, prevLs, vib, sr, fin, fout){
+    const N = V.length;
+    const out = new Float32Array(len);
+    if (len < 2 || N < 8) return out;
+    const a = N * 0.2, b = N * 0.8;
+    const nF = Math.max(1, Math.round(len / (HOLD_NOTE * sr)));
+    const H = len / nF;
+    const centerOf = f => a + (b - a) * (Math.min(nF - 1, Math.max(0, f)) + 0.5) / nF;
+    const glide = 0.045 * sr;
+    const period = t => {
+      const T = tOff + t;
+      let p = Ls;
+      if (prevLs && T < glide) p = prevLs * Math.pow(Ls / prevLs, T / glide);
+      if (vib){
+        const sec = T / sr;
+        const depth = 0.15 * Math.min(1, Math.max(0, (sec - 0.25) / 0.3));
+        p *= Math.pow(2, -depth * Math.sin(2 * Math.PI * 5.5 * sec) / 12);
+      }
+      return p;
+    };
+    const rd = pos => {
+      const i0 = Math.floor(pos), f = pos - i0;
+      const x0 = i0 >= 0 && i0 < N ? V[i0] : 0;
+      const x1 = i0 + 1 >= 0 && i0 + 1 < N ? V[i0 + 1] : 0;
+      return x0 + (x1 - x0) * f;
+    };
+    const marks = [0];
+    let t = 0;
+    while (t < len + 1){
+      t += period(t);
+      marks.push(t);
+    }
+    for (let k = 0; k + 1 < marks.length; k++){
+      const tk = marks[k];
+      const left = k > 0 ? marks[k - 1] : tk;
+      const right = marks[k + 1];
+      const x = tk / H - 0.5;
+      const j = Math.floor(x);
+      const u = Math.min(1, Math.max(0, x - j));
+      const jA = Math.min(nF - 1, Math.max(0, j));
+      const jB = Math.min(nF - 1, Math.max(0, j + 1));
+      let gA = 1, gB = 0;
+      if (jA !== jB){
+        gA = Math.cos(Math.PI * u / 2);
+        gB = Math.sin(Math.PI * u / 2);
+      }
+      const pcA = centerOf(jA), pcB = centerOf(jB);
+      const from = k > 0 ? Math.ceil(left) : 0;
+      const to = Math.min(len - 1, Math.floor(right));
+      for (let n = from; n <= to; n++){
+        const w = n < tk
+          ? 0.5 - 0.5 * Math.cos(Math.PI * (n - left) / (tk - left))
+          : 0.5 + 0.5 * Math.cos(Math.PI * (n - tk) / (right - tk));
+        const d = n - tk;
+        out[n] += w * (gB > 0 ? gA * rd(pcA + d) + gB * rd(pcB + d) : rd(pcA + d));
+      }
+    }
+    let so = 0, sv = 0;
+    for (let i = 0; i < len; i++) so += out[i] * out[i];
+    const ia = Math.floor(a), ib = Math.floor(b);
+    for (let i = ia; i < ib; i++) sv += V[i] * V[i];
+    const ro = Math.sqrt(so / len), rv = Math.sqrt(sv / Math.max(1, ib - ia));
+    if (ro > 1e-6 && rv > 0){
+      const g = Math.min(4, Math.max(0.25, rv / ro));
+      for (let i = 0; i < len; i++) out[i] *= g;
+    }
+    const fi = Math.min(Math.round(fin * sr), len >> 1);
+    const fo = Math.min(Math.round(fout * sr), len >> 1);
+    for (let i = 0; i < fi; i++) out[i] *= 0.5 - 0.5 * Math.cos(Math.PI * i / fi);
+    for (let i = 0; i < fo; i++) out[len - 1 - i] *= 0.5 - 0.5 * Math.cos(Math.PI * i / fo);
+    return out;
+  }
+
+  function vowelPart(nuc, VT, Ls, prevLs, vib, sr){
+    const keys = nuc.filter(k => raw8[k]);
+    if (!keys.length || VT < 2) return new Float32Array(Math.max(0, VT));
+    let w;
+    if (keys.length === 1){
+      w = [1];
+    } else if (keys.length === 2){
+      const x = keys[0], y = keys[1];
+      const firstShort = x === 'ㅣ' || ((x === 'ㅗ' || x === 'ㅜ') && y !== 'ㅣ') || (x === 'ㅜ' && y === 'ㅣ');
+      w = firstShort ? [0.25, 0.75] : [0.75, 0.25];
+    } else {
+      w = keys.map(() => 1 / keys.length);
+    }
+    const parts = [];
+    let used = 0;
+    keys.forEach((k, i) => {
+      const last = i === keys.length - 1;
+      const len = last ? VT - used : Math.round(VT * w[i]);
+      parts.push(sustain(raw8[k], len, used, Ls, prevLs, vib, sr, i === 0 ? 0.015 : 0.008, last ? 0.04 : 0.008));
+      used += len;
+    });
+    return join(parts);
+  }
+
+  function sing(sy, total, L, prevL, sr){
+    let on = join(sy.on.map(k => raw[k]).filter(Boolean));
+    let co = join(sy.co.map(k => raw[k]).filter(Boolean));
+    const budget = Math.round(total * 0.5);
+    if (on.length + co.length > budget){
+      const rate = Math.min(4, (on.length + co.length) / budget);
+      if (rate > 1.02){
+        if (on.length) on = stretch(on, rate);
+        if (co.length) co = stretch(co, rate);
+      }
+      const sum = on.length + co.length;
+      if (sum > budget){
+        const r = budget / sum;
+        on = clip(on, Math.floor(on.length * r));
+        co = clip(co, Math.floor(co.length * r));
+      }
+    }
+    const VT = total - on.length - co.length;
+    const vib = total > 0.6 * sr;
+    const vow = vowelPart(sy.nuc, VT, L * sr, prevL * sr, vib, sr);
+    const out = new Float32Array(total);
+    out.set(on, 0);
+    out.set(vow, on.length);
+    out.set(co, Math.min(total - co.length, on.length + vow.length));
+    return out;
+  }
+
+  function singSong(base, sr, notes){
+    const sylls = toSyllables(base);
+    if (!sylls.length || !notes.length) return new Float32Array(0);
+    const chunks = [];
+    let prevL = 0;
+    sylls.forEach((sy, i) => {
+      const note = notes[i % notes.length];
+      const L = Math.min(L_MAX, Math.max(L_MIN, 1 / note.f));
+      chunks.push(sing(sy, Math.max(1, Math.round(note.d * sr)), L, prevL, sr));
+      prevL = L;
+    });
+    const out = join(chunks);
+    let peak = 0;
     for (let i = 0; i < out.length; i++) peak = Math.max(peak, Math.abs(out[i]));
     if (peak > 0.98) for (let i = 0; i < out.length; i++) out[i] *= 0.98 / peak;
     return out;
@@ -887,7 +1147,7 @@
   });
 
   gen.addEventListener('click', async () => {
-    if (model.value === 'device') return;
+    if (model.value === 'device' || model.value === 'music') return;
     if (failed) return;
     const ver = parseFloat(model.value);
     const punctOn = $('punct').checked;
@@ -948,6 +1208,42 @@
       if (mode === 'vfast') samples = stretch(samples, 2);
     }
 
+    const blob = encodeWav(samples, sr);
+    if (lastUrl) URL.revokeObjectURL(lastUrl);
+    lastUrl = URL.createObjectURL(blob);
+    player.src = lastUrl;
+    dl.href = lastUrl;
+
+    msg.textContent = '';
+    result.style.display = 'block';
+    gen.disabled = false;
+    player.play().catch(() => {});
+  });
+
+  gen.addEventListener('click', async () => {
+    if (model.value !== 'music' || failed) return;
+    const base = buildQueue($('text').value, 1.8, false, false, false);
+    if (!base.some(i => typeof i === 'string')) return;
+
+    gen.disabled = true;
+    result.style.display = 'none';
+    player.pause();
+    msg.className = '';
+    msg.textContent = 'rica가 음성을 합성하고 있어요.';
+
+    await loading;
+    if (failed) return;
+    const ok = await ensureSpecial();
+    if (!ok){
+      msg.className = 'err';
+      msg.textContent = ERR;
+      gen.disabled = false;
+      return;
+    }
+    await new Promise(r => setTimeout(r, 500));
+
+    const sr = ctx.sampleRate;
+    const samples = singSong(base, sr, SONGS[$('song').value] || SONGS.twinkle);
     const blob = encodeWav(samples, sr);
     if (lastUrl) URL.revokeObjectURL(lastUrl);
     lastUrl = URL.createObjectURL(blob);
