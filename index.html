@@ -54,8 +54,9 @@
     <div class="model">
       <label for="model">모델</label>
       <select id="model">
+        <option value="1.9" selected>rica1.9</option>
         <option value="music">rica music</option>
-        <option value="1.8" selected>rica1.8</option>
+        <option value="1.8">rica1.8</option>
         <option value="1.7">rica1.7</option>
         <option value="1.6">rica1.6</option>
         <option value="1.5">rica1.5</option>
@@ -70,7 +71,6 @@
     </div>
     <div id="modelInfo" class="infobox" style="display:none"></div>
     <div id="settings" class="settings" style="display:none">
-      <div id="stdSettings">
       <div class="switchrow">
         <span>구두점 발음</span>
         <label class="switch"><input type="checkbox" id="punct"><span class="slider"></span></label>
@@ -91,6 +91,14 @@
           <option value="whisper">소곤거림</option>
         </select>
       </div>
+      <div class="field" id="songRow" style="display:none">
+        <p class="grp">노래</p>
+        <select id="song">
+          <option value="twinkle">반짝반짝 작은별</option>
+          <option value="airplane">떴다 떴다 비행기</option>
+          <option value="daisy">Daisy Bell</option>
+        </select>
+      </div>
       <div class="field" id="pitchRow" style="display:none">
         <p class="grp">음성 고저 <span id="pitchVal">30%</span></p>
         <input type="range" id="pitch" min="0" max="100" step="1" value="30">
@@ -108,15 +116,6 @@
       <div class="field" id="speedRange" style="display:none;margin-bottom:0">
         <p class="grp">음성 속도 <span id="speedVal">50%</span></p>
         <input type="range" id="speedPct" min="0" max="100" step="1" value="50">
-      </div>
-      </div>
-      <div id="musicSettings" style="display:none">
-        <p class="grp">노래</p>
-        <select id="song">
-          <option value="twinkle">반짝반짝 작은별</option>
-          <option value="airplane">떴다 떴다 비행기</option>
-          <option value="daisy">Daisy Bell</option>
-        </select>
       </div>
     </div>
     <textarea id="text" placeholder="텍스트를 입력하세요"></textarea>
@@ -178,6 +177,9 @@
   const HOLD_MIN = 0.012;
   const HOLD_PERIODS = 4;
   const HOLD_NOTE = 0.12;
+  const VOICES = [['normal', '일반'], ['natural', '더 자연스러움'], ['whisper', '소곤거림']];
+  const SONG_VOICES = [['twinkle', '반짝반짝 작은별'], ['airplane', '떴다 떴다 비행기'], ['daisy', 'Daisy Bell']];
+  const pitchVals = {natural: '30', song: '50'};
   const ERR = '현재 음성 합성 모델에 오류가 발생했습니다.';
 
   const $ = id => document.getElementById(id);
@@ -185,6 +187,7 @@
   const model = $('model'), gear = $('gear'), settings = $('settings'), speed = $('speed');
   const infoBtn = $('info'), infoBox = $('modelInfo');
   const DESC = {
+    '1.9': 'rica 1.9는 음성 종류에서 노래를 골라 원하는 멜로디로 노래를 부를 수 있습니다.',
     'music': '원하는 멜로디로 노래를 부를 수 있습니다.',
     'device': '기기에 내장된 음성 엔진을 사용합니다. 음성 설정은 기기 설정에서 하실 수 있습니다.',
     '1.1': 'srjs가 만든 최초로 한국어 텍스트를 발음할 수 있는 음성 합성 모델입니다. 아직 영어, 숫자 등 기호는 발음하지 못합니다.(rica1은 rice timer 맞춤형 숫자 읽기 ai)',
@@ -269,20 +272,43 @@
     } catch (e) {}
   })();
 
+  function songKey(){
+    if (model.value === 'music') return $('song').value;
+    if (parseFloat(model.value) >= 1.9 && SONG_VOICES.some(v => v[0] === $('voice').value)) return $('voice').value;
+    return null;
+  }
+
   function syncModel(){
+    const ver = parseFloat(model.value);
     const music = model.value === 'music';
-    const hasSettings = music || parseFloat(model.value) >= 1.3;
+    const hasSettings = music || ver >= 1.3;
+    const v18 = ver >= 1.8;
     gear.style.display = hasSettings ? '' : 'none';
-    $('stdSettings').style.display = music ? 'none' : '';
-    $('musicSettings').style.display = music ? '' : 'none';
-    $('profRow').style.display = parseFloat(model.value) >= 1.4 ? '' : 'none';
-    $('numRow').style.display = parseFloat(model.value) >= 1.6 ? '' : 'none';
-    const v18 = parseFloat(model.value) >= 1.8;
-    const vt = $('voice').value;
+    $('profRow').style.display = ver >= 1.4 || music ? '' : 'none';
+    $('numRow').style.display = ver >= 1.6 || music ? '' : 'none';
+    const voiceEl = $('voice');
+    const want = ver >= 1.9 ? VOICES.concat(SONG_VOICES) : VOICES;
+    if (voiceEl.options.length !== want.length){
+      const cur = voiceEl.value;
+      voiceEl.innerHTML = '';
+      want.forEach(w => {
+        const o = document.createElement('option');
+        o.value = w[0];
+        o.textContent = w[1];
+        voiceEl.appendChild(o);
+      });
+      voiceEl.value = want.some(w => w[0] === cur) ? cur : 'normal';
+    }
+    const vt = voiceEl.value;
+    const sk = songKey();
     $('voiceRow').style.display = v18 ? '' : 'none';
-    $('pitchRow').style.display = v18 && vt === 'natural' ? '' : 'none';
-    $('speedSel').style.display = v18 ? 'none' : '';
-    $('speedRange').style.display = v18 ? '' : 'none';
+    $('songRow').style.display = music ? '' : 'none';
+    $('pitchRow').style.display = music || (v18 && (vt === 'natural' || sk)) ? '' : 'none';
+    $('speedSel').style.display = v18 || music ? 'none' : '';
+    $('speedRange').style.display = v18 || music ? '' : 'none';
+    const pv = pitchVals[sk ? 'song' : 'natural'];
+    $('pitch').value = pv;
+    $('pitchVal').textContent = pv + '%';
     if ((v18 && vt !== 'normal') || music) ensureSpecial();
     if (!hasSettings) settings.style.display = 'none';
     if (failed){
@@ -292,9 +318,9 @@
       msg.textContent = dev ? '' : ERR;
     }
   }
-  $('prof').checked = parseFloat(model.value) >= 1.7;
+  $('prof').checked = parseFloat(model.value) >= 1.7 || model.value === 'music';
   model.addEventListener('change', () => {
-    $('prof').checked = parseFloat(model.value) >= 1.7;
+    $('prof').checked = parseFloat(model.value) >= 1.7 || model.value === 'music';
     syncModel();
     if (model.value === 'music') settings.style.display = 'block';
     if (infoBox.style.display !== 'none') showInfo();
@@ -305,6 +331,7 @@
   $('voice').addEventListener('change', syncModel);
   $('pitch').addEventListener('input', () => {
     $('pitchVal').textContent = $('pitch').value + '%';
+    pitchVals[songKey() ? 'song' : 'natural'] = $('pitch').value;
   });
   $('speedPct').addEventListener('input', () => {
     $('speedVal').textContent = $('speedPct').value + '%';
@@ -896,7 +923,8 @@
         continue;
       }
       flush();
-      if (it && it.m === 'syl') single = true;
+      if (it === 'BEEP') out.push({beep: true});
+      else if (it && it.m === 'syl') single = true;
     }
     flush();
     return out;
@@ -1019,6 +1047,12 @@
   }
 
   function sing(sy, total, L, prevL, sr){
+    if (sy.beep){
+      const bo = new Float32Array(total);
+      const bp = raw.BEEP;
+      if (bp) bo.set(bp.length > total ? clip(bp, total) : bp, 0);
+      return bo;
+    }
     let on = join(sy.on.map(k => raw[k]).filter(Boolean));
     let co = join(sy.co.map(k => raw[k]).filter(Boolean));
     const budget = Math.round(total * 0.5);
@@ -1045,15 +1079,15 @@
     return out;
   }
 
-  function singSong(base, sr, notes){
+  function singSong(base, sr, notes, tempo = 1, semis = 0){
     const sylls = toSyllables(base);
     if (!sylls.length || !notes.length) return new Float32Array(0);
     const chunks = [];
     let prevL = 0;
     sylls.forEach((sy, i) => {
       const note = notes[i % notes.length];
-      const L = Math.min(L_MAX, Math.max(L_MIN, 1 / note.f));
-      chunks.push(sing(sy, Math.max(1, Math.round(note.d * sr)), L, prevL, sr));
+      const L = Math.min(L_MAX, Math.max(L_MIN, 1 / (note.f * Math.pow(2, semis / 12))));
+      chunks.push(sing(sy, Math.max(1, Math.round(note.d / tempo * sr)), L, prevL, sr));
       prevL = L;
     });
     const out = join(chunks);
@@ -1147,7 +1181,7 @@
   });
 
   gen.addEventListener('click', async () => {
-    if (model.value === 'device' || model.value === 'music') return;
+    if (model.value === 'device' || songKey()) return;
     if (failed) return;
     const ver = parseFloat(model.value);
     const punctOn = $('punct').checked;
@@ -1221,8 +1255,9 @@
   });
 
   gen.addEventListener('click', async () => {
-    if (model.value !== 'music' || failed) return;
-    const base = buildQueue($('text').value, 1.8, false, false, false);
+    const key = songKey();
+    if (!key || failed) return;
+    const base = buildQueue($('text').value, 1.9, $('punct').checked, $('prof').checked, $('gather').checked);
     if (!base.some(i => typeof i === 'string')) return;
 
     gen.disabled = true;
@@ -1233,8 +1268,9 @@
 
     await loading;
     if (failed) return;
+    await beepLoading;
     const ok = await ensureSpecial();
-    if (!ok){
+    if (!ok || (base.includes('BEEP') && !raw.BEEP)){
       msg.className = 'err';
       msg.textContent = ERR;
       gen.disabled = false;
@@ -1243,7 +1279,12 @@
     await new Promise(r => setTimeout(r, 500));
 
     const sr = ctx.sampleRate;
-    const samples = singSong(base, sr, SONGS[$('song').value] || SONGS.twinkle);
+    const sp = parseInt($('speedPct').value, 10);
+    const spd = Math.min(100, Math.max(0, Number.isNaN(sp) ? 50 : sp));
+    const tempo = spd >= 50 ? 1 + (spd - 50) * 3 / 50 : 1 / (1 + (50 - spd) * 3 / 50);
+    const pp = parseInt($('pitch').value, 10);
+    const semis = ((Number.isNaN(pp) ? 50 : pp) - 50) / 50 * 12;
+    const samples = singSong(base, sr, SONGS[key] || SONGS.twinkle, tempo, semis);
     const blob = encodeWav(samples, sr);
     if (lastUrl) URL.revokeObjectURL(lastUrl);
     lastUrl = URL.createObjectURL(blob);
