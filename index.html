@@ -1050,7 +1050,22 @@
     if (sy.beep){
       const bo = new Float32Array(total);
       const bp = raw.BEEP;
-      if (bp) bo.set(bp.length > total ? clip(bp, total) : bp, 0);
+      if (bp){
+        const rate = 1 / (L * 510);
+        const full = Math.floor((bp.length - 1) / rate) + 1;
+        const n = Math.min(total, full);
+        const g = i => (i >= 0 && i < bp.length ? bp[i] : 0);
+        for (let i = 0; i < n; i++){
+          const pos = i * rate;
+          const i1 = Math.floor(pos), f = pos - i1;
+          const y0 = g(i1 - 1), y1 = g(i1), y2 = g(i1 + 1), y3 = g(i1 + 2);
+          bo[i] = y1 + 0.5 * f * (y2 - y0 + f * (2 * y0 - 5 * y1 + 4 * y2 - y3 + f * (3 * (y1 - y2) + y3 - y0)));
+        }
+        if (full > total){
+          const fd = Math.min(n, 220);
+          for (let i = 0; i < fd; i++) bo[n - 1 - i] *= i / fd;
+        }
+      }
       return bo;
     }
     let on = join(sy.on.map(k => raw[k]).filter(Boolean));
