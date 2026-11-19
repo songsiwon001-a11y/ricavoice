@@ -1051,7 +1051,7 @@
       const bo = new Float32Array(total);
       const bp = raw.BEEP;
       if (bp){
-        const rate = 1 / (L * 510);
+        const rate = 1 / (L * 610);
         const full = Math.floor((bp.length - 1) / rate) + 1;
         const n = Math.min(total, full);
         const g = i => (i >= 0 && i < bp.length ? bp[i] : 0);
@@ -1298,7 +1298,7 @@
     const spd = Math.min(100, Math.max(0, Number.isNaN(sp) ? 50 : sp));
     const tempo = spd >= 50 ? 1 + (spd - 50) * 3 / 50 : 1 / (1 + (50 - spd) * 3 / 50);
     const pp = parseInt($('pitch').value, 10);
-    const semis = ((Number.isNaN(pp) ? 50 : pp) - 50) / 50 * 12;
+    const semis = ((Number.isNaN(pp) ? 50 : pp) - 50) / 100 * 12 * Math.log2(L_MAX / L_MIN);
     const samples = singSong(base, sr, SONGS[key] || SONGS.twinkle, tempo, semis);
     const blob = encodeWav(samples, sr);
     if (lastUrl) URL.revokeObjectURL(lastUrl);
