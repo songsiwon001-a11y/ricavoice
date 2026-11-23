@@ -717,7 +717,7 @@
       if (buf && VOWELS.has(k) && keep < 1) buf = cutTail(buf, keep);
       if (buf && !whisper && semis && BASIC_REF[k]){
         const f = Math.min(1 / L_MIN, Math.max(1 / L_MAX, BASIC_REF[k] * Math.pow(2, semis / 12)));
-        buf = pitchShift(buf, f / BASIC_REF[k]);
+        buf = loopVoice(buf, BASIC_REF[k], buf.length, 0, sr / f, 0, false, sr, 0.001, 0.003);
       }
       memo[k] = buf;
       return buf;
