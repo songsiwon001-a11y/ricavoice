@@ -97,6 +97,14 @@
           <option value="twinkle">반짝반짝 작은별</option>
           <option value="airplane">떴다 떴다 비행기</option>
           <option value="daisy">Daisy Bell</option>
+          <option value="chiikawa">치이카와 세이렌의 노래</option>
+        </select>
+      </div>
+      <div class="field" id="qualRow" style="display:none">
+        <p class="grp">음성 품질</p>
+        <select id="qual">
+          <option value="basic" selected>일반</option>
+          <option value="hq">고품질</option>
         </select>
       </div>
       <div class="field" id="pitchRow" style="display:none">
@@ -177,9 +185,21 @@
   const HOLD_MIN = 0.012;
   const HOLD_PERIODS = 4;
   const HOLD_NOTE = 0.12;
+  const BASIC_REF = {
+    'ㄴ': 440 * Math.pow(2, (54 - 69) / 12),
+    'ㄹ': 200,
+    'ㅁ': 440 * Math.pow(2, (51 - 69) / 12),
+    'ㅇ': 170,
+    'ㅏ': 225,
+    'ㅓ': 270,
+    'ㅗ': 150,
+    'ㅜ': 180,
+    'ㅡ': 240,
+    'ㅣ': 250
+  };
   const VOICES = [['normal', '일반'], ['natural', '더 자연스러움'], ['whisper', '소곤거림']];
-  const SONG_VOICES = [['twinkle', '반짝반짝 작은별'], ['airplane', '떴다 떴다 비행기'], ['daisy', 'Daisy Bell']];
-  const pitchVals = {natural: '30', song: '50'};
+  const SONG_VOICES = [['twinkle', '반짝반짝 작은별'], ['airplane', '떴다 떴다 비행기'], ['daisy', 'Daisy Bell'], ['chiikawa', '치이카와 세이렌의 노래']];
+  const pitchVals = {natural: '30', song: '50', normal: '50'};
   const ERR = '현재 음성 합성 모델에 오류가 발생했습니다.';
 
   const $ = id => document.getElementById(id);
@@ -278,6 +298,11 @@
     return null;
   }
 
+  function pitchKey(){
+    if (songKey()) return 'song';
+    return parseFloat(model.value) >= 1.8 && $('voice').value === 'normal' ? 'normal' : 'natural';
+  }
+
   function syncModel(){
     const ver = parseFloat(model.value);
     const music = model.value === 'music';
@@ -303,10 +328,11 @@
     const sk = songKey();
     $('voiceRow').style.display = v18 ? '' : 'none';
     $('songRow').style.display = music ? '' : 'none';
-    $('pitchRow').style.display = music || (v18 && (vt === 'natural' || sk)) ? '' : 'none';
+    $('qualRow').style.display = music ? '' : 'none';
+    $('pitchRow').style.display = music || (v18 && (vt === 'natural' || vt === 'normal' || sk)) ? '' : 'none';
     $('speedSel').style.display = v18 || music ? 'none' : '';
     $('speedRange').style.display = v18 || music ? '' : 'none';
-    const pv = pitchVals[sk ? 'song' : 'natural'];
+    const pv = pitchVals[pitchKey()];
     $('pitch').value = pv;
     $('pitchVal').textContent = pv + '%';
     if ((v18 && vt !== 'normal') || music) ensureSpecial();
@@ -331,7 +357,7 @@
   $('voice').addEventListener('change', syncModel);
   $('pitch').addEventListener('input', () => {
     $('pitchVal').textContent = $('pitch').value + '%';
-    pitchVals[songKey() ? 'song' : 'natural'] = $('pitch').value;
+    pitchVals[pitchKey()] = $('pitch').value;
   });
   $('speedPct').addEventListener('input', () => {
     $('speedVal').textContent = $('speedPct').value + '%';
@@ -674,7 +700,28 @@
     return out;
   }
 
-  function merge(q, sr, whisper){
+  function cutTail(V, keep){
+    if (keep >= 1) return V;
+    const n = Math.min(V.length, Math.max(Math.min(V.length, 1024), Math.round(V.length * keep)));
+    const out = V.slice(0, n);
+    const f = Math.min(n >> 1, 360);
+    for (let i = 0; i < f; i++) out[n - 1 - i] *= 0.5 - 0.5 * Math.cos(Math.PI * i / f);
+    return out;
+  }
+
+  function merge(q, sr, whisper, keep = 1, semis = 0){
+    const memo = {};
+    const piece = k => {
+      if (k in memo) return memo[k];
+      let buf = whisper && VOWELS.has(k) ? raw8[k] : raw[k];
+      if (buf && VOWELS.has(k) && keep < 1) buf = cutTail(buf, keep);
+      if (buf && !whisper && semis && BASIC_REF[k]){
+        const f = Math.min(1 / L_MIN, Math.max(1 / L_MAX, BASIC_REF[k] * Math.pow(2, semis / 12)));
+        buf = pitchShift(buf, f / BASIC_REF[k]);
+      }
+      memo[k] = buf;
+      return buf;
+    };
     const parts = [];
     let total = 0;
     for (const it of q){
@@ -682,7 +729,7 @@
         const n = Math.round(sr * GAP_MS / 1000 * it);
         parts.push(n); total += n;
       } else if (typeof it === 'string'){
-        const buf = whisper && VOWELS.has(it) ? raw8[it] : raw[it];
+        const buf = piece(it);
         if (buf){
           parts.push(buf); total += buf.length;
         }
@@ -757,7 +804,9 @@
     return out;
   }
 
-  function mergeNatural(q, sr, level){
+  function mergeNatural(q, sr, level, keep = 1){
+    const cuts = {};
+    const vowelOf = k => (keep < 1 && raw8[k] ? (cuts[k] || (cuts[k] = cutTail(raw8[k], keep))) : raw8[k]);
     let seed = 20261107;
     const rnd = () => (seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0) / 4294967296;
     const events = [];
@@ -827,10 +876,10 @@
     for (const e of events){
       if (e.t === 'n'){
         let tot = 0;
-        for (const s of e.segs) if (raw8[s.k]) tot += raw8[s.k].length * s.d;
+        for (const s of e.segs) if (raw8[s.k]) tot += vowelOf(s.k).length * s.d;
         let off = 0;
         for (const s of e.segs){
-          const V = raw8[s.k];
+          const V = vowelOf(s.k);
           if (!V) continue;
           add(synthVowel(V, s.d, tot, off, e, level, sr, rnd));
           off += V.length * s.d;
@@ -857,11 +906,22 @@
   function parseSong(str){
     const tk = str.trim().split(/\s+/);
     const notes = [];
-    for (let i = 0; i + 1 < tk.length; i += 2){
-      const m = /^([a-g])(#?)(\d)$/.exec(tk[i].toLowerCase());
-      if (!m) continue;
-      const midi = 12 * (Number(m[3]) + 1) + NOTE_SEMI[m[1]] + (m[2] ? 1 : 0);
-      notes.push({f: 440 * Math.pow(2, (midi - 69) / 12), d: parseFloat(tk[i + 1])});
+    const num = /^\d*\.?\d+s?$/;
+    let i = 0;
+    while (i + 1 < tk.length){
+      const a = tk[i].toLowerCase(), b = tk[i + 1].toLowerCase();
+      if (b === 'silent' && num.test(a)){
+        notes.push({silent: true, d: parseFloat(a)});
+      } else if (a === 'silent' && num.test(b)){
+        notes.push({silent: true, d: parseFloat(b)});
+      } else {
+        const m = /^([a-g])(#?)(\d)$/.exec(a);
+        if (m){
+          const midi = 12 * (Number(m[3]) + 1) + NOTE_SEMI[m[1]] + (m[2] ? 1 : 0);
+          notes.push({f: 440 * Math.pow(2, (midi - 69) / 12), d: parseFloat(b)});
+        }
+      }
+      i += 2;
     }
     return notes;
   }
@@ -869,6 +929,7 @@
   const SONGS = {
     twinkle: parseSong('c4 0.5 c4 0.5 g4 0.5 g4 0.5 a4 0.5 a4 0.5 g4 1 f4 0.5 f4 0.5 e4 0.5 e4 0.5 d4 0.5 d4 0.5 c4 1 g4 0.5 g4 0.5 f4 0.5 f4 0.5 e4 0.5 e4 0.5 d4 1 g4 0.5 g4 0.5 f4 0.5 f4 0.5 e4 0.5 e4 0.5 d4 1 c4 0.5 c4 0.5 g4 0.5 g4 0.5 a4 0.5 a4 0.5 g4 1 f4 0.5 f4 0.5 e4 0.5 e4 0.5 d4 0.5 d4 0.5 c4 1'),
     airplane: parseSong('e4 0.5 d4 0.5 c4 0.5 d4 0.5 e4 0.5 e4 0.5 e4 1 d4 0.5 d4 0.5 d4 1 e4 0.5 g4 0.5 g4 1 e4 0.5 d4 0.5 c4 0.5 d4 0.5 e4 0.5 e4 0.5 e4 1 d4 0.5 d4 0.5 e4 0.5 d4 0.5 c4 2'),
+    chiikawa: parseSong('b4 0.4s c5 0.8s a4 0.4s b4 0.8s g4 0.4s a4 0.8s a4 0.2s c5 0.2s b4 0.8s b4 0.4s c5 0.8s a4 0.4s b4 0.8s g4 0.4s a4 0.8s a4 0.2s c5 0.2s b4 1.6s a4 0.2s a4 0.2s a4 0.4s f4 0.4s g4 0.2s g4 0.2s a4 0.4s a#4 0.4s c5 0.4s c5 0.4s d#5 0.4s d5 1.2s a#4 0.1s a#4 0.1s a#4 0.1s a#4 0.1s c5 0.2s c5 0.1s d5 0.8s 1s silent f4 0.8s f4 0.8s e4 0.8s f4 1.6s'),
     daisy: parseSong('g4 0.9s e4 0.9s c4 0.9s g3 0.9s a3 0.3s b3 0.3s c4 0.3s a3 0.6s c4 0.3 g3 1.8s d4 0.9s g4 0.9s e4 0.9s c4 0.9s a3 0.3s b3 0.3s c4 0.3s d4 0.6s e4 0.3s d4 1.5s e4 0.3s f4 0.3s e4 0.3s d4 0.3s g4 0.6s e4 0.3s d4 0.3s c4 1.2s d4 0.3s e4 0.6s c4 0.3s a3 0.6s c4 0.3s a3 0.3s g3 1.2s g3 0.3s c4 0.6s e4 0.3s d4 0.6s g3 0.3 c4 0.6s e4 0.3s d4 0.3s e4 0.3s f4 0.3s g4 0.3s e4 0.3s c4 0.3s d4 0.6s g3 0.3s c4 1.8s')
   };
 
@@ -1022,8 +1083,62 @@
     return out;
   }
 
-  function vowelPart(nuc, VT, Ls, prevLs, vib, sr){
-    const keys = nuc.filter(k => raw8[k]);
+  function cubicAt(x, p){
+    const N = x.length;
+    const i1 = Math.floor(p), f = p - i1;
+    const g = i => (i >= 0 && i < N ? x[i] : 0);
+    const y0 = g(i1 - 1), y1 = g(i1), y2 = g(i1 + 1), y3 = g(i1 + 2);
+    return y1 + 0.5 * f * (y2 - y0 + f * (2 * y0 - 5 * y1 + 4 * y2 - y3 + f * (3 * (y1 - y2) + y3 - y0)));
+  }
+
+  function pitchShift(x, rate){
+    const n = Math.max(1, Math.floor((x.length - 1) / rate) + 1);
+    const out = new Float32Array(n);
+    for (let i = 0; i < n; i++) out[i] = cubicAt(x, i * rate);
+    return out;
+  }
+
+  function loopVoice(V, ref, len, tOff, Ls, prevLs, vib, sr, fin, fout){
+    const N = V.length;
+    const out = new Float32Array(len);
+    if (len < 2 || N < 8) return out;
+    const P0 = sr / ref;
+    const K = Math.max(1, Math.floor(0.6 * N / P0));
+    const LL = Math.min(K * P0, N * 0.9);
+    let X = LL / 4;
+    let s0 = Math.max(X, Math.floor(0.2 * N));
+    if (s0 + LL > N - 1) s0 = Math.max(0, N - 1 - LL);
+    X = Math.min(X, s0);
+    const e0 = s0 + LL;
+    const glide = 0.045 * sr;
+    let pos = 0;
+    for (let n = 0; n < len; n++){
+      const T = tOff + n;
+      let p = Ls;
+      if (prevLs && T < glide) p = prevLs * Math.pow(Ls / prevLs, T / glide);
+      if (vib){
+        const sec = T / sr;
+        const depth = 0.15 * Math.min(1, Math.max(0, (sec - 0.25) / 0.3));
+        p *= Math.pow(2, -depth * Math.sin(2 * Math.PI * 5.5 * sec) / 12);
+      }
+      const q = pos >= e0 ? s0 + ((pos - s0) % LL) : pos;
+      if (X > 0 && q >= e0 - X){
+        const w = (q - (e0 - X)) / X;
+        out[n] = (1 - w) * cubicAt(V, q) + w * cubicAt(V, q - LL);
+      } else {
+        out[n] = cubicAt(V, q);
+      }
+      pos += sr / (p * ref);
+    }
+    const fi = Math.min(Math.round(fin * sr), len >> 1);
+    const fo = Math.min(Math.round(fout * sr), len >> 1);
+    for (let i = 0; i < fi; i++) out[i] *= 0.5 - 0.5 * Math.cos(Math.PI * i / fi);
+    for (let i = 0; i < fo; i++) out[len - 1 - i] *= 0.5 - 0.5 * Math.cos(Math.PI * i / fo);
+    return out;
+  }
+
+  function vowelPart(nuc, VT, Ls, prevLs, vib, sr, basic){
+    const keys = nuc.filter(k => (basic && BASIC_REF[k] ? raw[k] : raw8[k]));
     if (!keys.length || VT < 2) return new Float32Array(Math.max(0, VT));
     let w;
     if (keys.length === 1){
@@ -1040,13 +1155,16 @@
     keys.forEach((k, i) => {
       const last = i === keys.length - 1;
       const len = last ? VT - used : Math.round(VT * w[i]);
-      parts.push(sustain(raw8[k], len, used, Ls, prevLs, vib, sr, i === 0 ? 0.015 : 0.008, last ? 0.04 : 0.008));
+      const fi = i === 0 ? 0.015 : 0.008, fo = last ? 0.04 : 0.008;
+      parts.push(basic && BASIC_REF[k]
+        ? loopVoice(raw[k], BASIC_REF[k], len, used, Ls, prevLs, vib, sr, fi, fo)
+        : sustain(raw8[k], len, used, Ls, prevLs, vib, sr, fi, fo));
       used += len;
     });
     return join(parts);
   }
 
-  function sing(sy, total, L, prevL, sr){
+  function sing(sy, total, L, prevL, sr, basic){
     if (sy.beep){
       const bo = new Float32Array(total);
       const bp = raw.BEEP;
@@ -1068,8 +1186,9 @@
       }
       return bo;
     }
-    let on = join(sy.on.map(k => raw[k]).filter(Boolean));
-    let co = join(sy.co.map(k => raw[k]).filter(Boolean));
+    const pick = k => (basic && BASIC_REF[k] && raw[k] ? pitchShift(raw[k], 1 / (L * BASIC_REF[k])) : raw[k]);
+    let on = join(sy.on.map(pick).filter(Boolean));
+    let co = join(sy.co.map(pick).filter(Boolean));
     const budget = Math.round(total * 0.5);
     if (on.length + co.length > budget){
       const rate = Math.min(4, (on.length + co.length) / budget);
@@ -1086,7 +1205,7 @@
     }
     const VT = total - on.length - co.length;
     const vib = total > 0.6 * sr;
-    const vow = vowelPart(sy.nuc, VT, L * sr, prevL * sr, vib, sr);
+    const vow = vowelPart(sy.nuc, VT, L * sr, prevL * sr, vib, sr, basic);
     const out = new Float32Array(total);
     out.set(on, 0);
     out.set(vow, on.length);
@@ -1094,15 +1213,22 @@
     return out;
   }
 
-  function singSong(base, sr, notes, tempo = 1, semis = 0){
+  function singSong(base, sr, notes, tempo = 1, semis = 0, basic = false){
     const sylls = toSyllables(base);
-    if (!sylls.length || !notes.length) return new Float32Array(0);
+    if (!sylls.length || !notes.some(n => !n.silent)) return new Float32Array(0);
     const chunks = [];
-    let prevL = 0;
-    sylls.forEach((sy, i) => {
-      const note = notes[i % notes.length];
+    let prevL = 0, ni = 0;
+    sylls.forEach(sy => {
+      let note = notes[ni % notes.length];
+      while (note.silent){
+        chunks.push(new Float32Array(Math.max(1, Math.round(note.d / tempo * sr))));
+        prevL = 0;
+        ni++;
+        note = notes[ni % notes.length];
+      }
+      ni++;
       const L = Math.min(L_MAX, Math.max(L_MIN, 1 / (note.f * Math.pow(2, semis / 12))));
-      chunks.push(sing(sy, Math.max(1, Math.round(note.d / tempo * sr)), L, prevL, sr));
+      chunks.push(sing(sy, Math.max(1, Math.round(note.d / tempo * sr)), L, prevL, sr, basic));
       prevL = L;
     });
     const out = join(chunks);
@@ -1249,10 +1375,11 @@
 
     const sr = ctx.sampleRate;
     const level = Math.min(1, Math.max(0, (parseFloat($('pitch').value) || 0) / 100));
-    let samples = natural ? mergeNatural(q, sr, level) : merge(q, sr, voice === 'whisper');
-    if (ver >= 1.8){
-      if (rate > 1.001) samples = stretch(samples, rate);
-    } else {
+    const pn = parseInt($('pitch').value, 10);
+    const semis = ver >= 1.8 && voice === 'normal' ? ((Number.isNaN(pn) ? 50 : pn) - 50) / 100 * 12 * Math.log2(L_MAX / L_MIN) : 0;
+    const keep = rate > 1.001 ? 1 / rate : 1;
+    let samples = natural ? mergeNatural(q, sr, level, keep) : merge(q, sr, voice === 'whisper', keep, semis);
+    if (ver < 1.8){
       if (mode === 'fast') samples = stretch(samples, 1.5);
       if (mode === 'vfast') samples = stretch(samples, 2);
     }
@@ -1284,7 +1411,9 @@
     await loading;
     if (failed) return;
     await beepLoading;
-    const ok = await ensureSpecial();
+    const basic = model.value === 'music' && $('qual').value === 'basic';
+    const needSpecial = !basic || base.some(k => k === 'ㅐ' || k === 'ㅔ');
+    const ok = needSpecial ? await ensureSpecial() : true;
     if (!ok || (base.includes('BEEP') && !raw.BEEP)){
       msg.className = 'err';
       msg.textContent = ERR;
@@ -1299,7 +1428,7 @@
     const tempo = spd >= 50 ? 1 + (spd - 50) * 3 / 50 : 1 / (1 + (50 - spd) * 3 / 50);
     const pp = parseInt($('pitch').value, 10);
     const semis = ((Number.isNaN(pp) ? 50 : pp) - 50) / 100 * 12 * Math.log2(L_MAX / L_MIN);
-    const samples = singSong(base, sr, SONGS[key] || SONGS.twinkle, tempo, semis);
+    const samples = singSong(base, sr, SONGS[key] || SONGS.twinkle, tempo, semis, basic);
     const blob = encodeWav(samples, sr);
     if (lastUrl) URL.revokeObjectURL(lastUrl);
     lastUrl = URL.createObjectURL(blob);
