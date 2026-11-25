@@ -54,7 +54,8 @@
     <div class="model">
       <label for="model">모델</label>
       <select id="model">
-        <option value="1.9" selected>rica1.9</option>
+        <option value="2.0" selected>rica2.0</option>
+        <option value="1.9">rica1.9</option>
         <option value="music">rica music</option>
         <option value="1.8">rica1.8</option>
         <option value="1.7">rica1.7</option>
@@ -208,6 +209,7 @@
     'ㅔ': 440 * Math.pow(2, (53 - 69) / 12)
   };
   const VOICES = [['normal', '일반'], ['natural', '더 자연스러움'], ['whisper', '소곤거림']];
+  const GEUN = [['geun', '김근육']];
   const SONG_LIST = [['twinkle', '반짝반짝 작은별'], ['airplane', '떴다 떴다 비행기'], ['daisy', 'Daisy Bell'], ['chiikawa', '치이카와 세이렌의 노래']];
   const SONG_VOICES = [].concat(...SONG_LIST.map(w => [[w[0], w[1]], [w[0] + ':hq', w[1] + ' (고품질)']]));
   const CHOIR_SONGS = ['twinkle', 'daisy'];
@@ -219,6 +221,7 @@
   const model = $('model'), gear = $('gear'), settings = $('settings'), speed = $('speed');
   const infoBtn = $('info'), infoBox = $('modelInfo');
   const DESC = {
+    '2.0': 'rica 2.0은 음성 종류에 김근육 목소리가 추가되었습니다.',
     '1.9': 'rica 1.9는 음성 종류에서 노래를 골라 원하는 멜로디로 노래를 부를 수 있습니다.',
     'music': '원하는 멜로디로 노래를 부를 수 있습니다.',
     'device': '기기에 내장된 음성 엔진을 사용합니다. 음성 설정은 기기 설정에서 하실 수 있습니다.',
@@ -282,6 +285,56 @@
     return specialPromise;
   }
 
+  const rawG = {}, GREF = {};
+  let geunPromise = null;
+
+  function estimateF0(x, sr){
+    const N = x.length;
+    const lo = Math.floor(sr / 500), hi = Math.floor(sr / 70);
+    const s0 = Math.floor(N * 0.3);
+    const W = Math.min(Math.floor(N * 0.4), 6000, N - s0 - hi - 1);
+    if (W < hi) return 150;
+    const sc = [];
+    for (let l = lo; l <= hi; l++){
+      let c = 0;
+      for (let i = 0; i < W; i++) c += x[s0 + i] * x[s0 + i + l];
+      sc.push(c);
+    }
+    let k0 = 1;
+    while (k0 < sc.length && sc[k0] <= sc[k0 - 1]) k0++;
+    let mx = 0;
+    for (let k = k0; k < sc.length; k++) mx = Math.max(mx, sc[k]);
+    if (!(mx > 0)) return 150;
+    for (let k = k0; k < sc.length; k++){
+      if (sc[k] >= 0.9 * mx){
+        let m = k;
+        while (m + 1 < sc.length && sc[m + 1] >= sc[m]) m++;
+        let d = 0;
+        if (m > 0 && m + 1 < sc.length){
+          const a = sc[m - 1], b = sc[m], c = sc[m + 1];
+          const den = a - 2 * b + c;
+          if (den !== 0) d = 0.5 * (a - c) / den;
+        }
+        return sr / (lo + m + d);
+      }
+    }
+    return 150;
+  }
+
+  function ensureGeun(){
+    if (!geunPromise){
+      geunPromise = Promise.all(['ㅏ', 'ㅓ', 'ㅗ', 'ㅜ', 'ㅡ', 'ㅣ', 'ㅐㅔ'].map(async n => {
+        const buf = await loadWav(encodeURIComponent(n + '(김근육)') + '.wav');
+        const ref = estimateF0(buf, ctx.sampleRate);
+        [...n].forEach(k => { rawG[k] = buf; GREF[k] = ref; });
+      })).then(() => true, () => {
+        geunPromise = null;
+        return false;
+      });
+    }
+    return geunPromise;
+  }
+
   const loading = loadAll().catch(() => {
     failed = true;
     syncModel();
@@ -312,7 +365,7 @@
 
   function pitchKey(){
     if (songKey()) return 'song';
-    return parseFloat(model.value) >= 1.8 && $('voice').value === 'normal' ? 'normal' : 'natural';
+    return parseFloat(model.value) >= 1.8 && ($('voice').value === 'normal' || $('voice').value === 'geun') ? 'normal' : 'natural';
   }
 
   function syncModel(){
@@ -324,7 +377,7 @@
     $('profRow').style.display = ver >= 1.4 || music ? '' : 'none';
     $('numRow').style.display = ver >= 1.6 || music ? '' : 'none';
     const voiceEl = $('voice');
-    const want = ver >= 1.9 ? VOICES.concat(SONG_VOICES) : VOICES;
+    const want = ver >= 2 ? VOICES.concat(GEUN, SONG_VOICES) : ver >= 1.9 ? VOICES.concat(SONG_VOICES) : VOICES;
     if (voiceEl.options.length !== want.length){
       const cur = voiceEl.value;
       voiceEl.innerHTML = '';
@@ -343,13 +396,14 @@
     $('qualRow').style.display = music ? '' : 'none';
     $('choirRow').style.display = sk && CHOIR_SONGS.includes(sk) ? '' : 'none';
     $('wordRow').style.display = sk ? '' : 'none';
-    $('pitchRow').style.display = music || (v18 && (vt === 'natural' || vt === 'normal' || sk)) ? '' : 'none';
+    $('pitchRow').style.display = music || (v18 && (vt === 'natural' || vt === 'normal' || vt === 'geun' || sk)) ? '' : 'none';
     $('speedSel').style.display = v18 || music ? 'none' : '';
     $('speedRange').style.display = v18 || music ? '' : 'none';
     const pv = pitchVals[pitchKey()];
     $('pitch').value = pv;
     $('pitchVal').textContent = pv + '%';
-    if ((v18 && vt !== 'normal') || music) ensureSpecial();
+    if ((v18 && vt !== 'normal' && vt !== 'geun') || music) ensureSpecial();
+    if (ver >= 2 && vt === 'geun') ensureGeun();
     if (!hasSettings) settings.style.display = 'none';
     if (failed){
       const dev = model.value === 'device';
@@ -723,15 +777,17 @@
     return out;
   }
 
-  function merge(q, sr, whisper, keep = 1, semis = 0){
+  function merge(q, sr, whisper, keep = 1, semis = 0, geun = false){
     const memo = {};
     const piece = k => {
       if (k in memo) return memo[k];
-      let buf = whisper && VOWELS.has(k) ? raw8[k] : raw[k];
+      const gv = geun && VOWELS.has(k);
+      let buf = gv ? rawG[k] : whisper && VOWELS.has(k) ? raw8[k] : raw[k];
       if (buf && VOWELS.has(k) && keep < 1) buf = cutTail(buf, keep);
-      if (buf && !whisper && semis && BASIC_REF[k]){
-        const f = Math.min(1 / L_MIN, Math.max(1 / L_MAX, BASIC_REF[k] * Math.pow(2, semis / 12)));
-        buf = loopVoice(buf, BASIC_REF[k], buf.length, 0, sr / f, 0, false, sr, 0.001, 0.003);
+      const ref = gv ? GREF[k] : BASIC_REF[k];
+      if (buf && !whisper && semis && ref){
+        const f = Math.min(1 / L_MIN, Math.max(1 / L_MAX, ref * Math.pow(2, semis / 12)));
+        buf = loopVoice(buf, ref, buf.length, 0, sr / f, 0, false, sr, 0.001, 0.003);
       }
       memo[k] = buf;
       return buf;
@@ -1443,7 +1499,16 @@
       gen.disabled = false;
       return;
     }
-    if (voice !== 'normal'){
+    if (voice === 'geun'){
+      const okG = await ensureGeun();
+      if (!okG){
+        msg.className = 'err';
+        msg.textContent = ERR;
+        gen.disabled = false;
+        return;
+      }
+    }
+    if (voice !== 'normal' && voice !== 'geun'){
       const ok = await ensureSpecial();
       if (!ok){
         msg.className = 'err';
@@ -1457,9 +1522,9 @@
     const sr = ctx.sampleRate;
     const level = Math.min(1, Math.max(0, (parseFloat($('pitch').value) || 0) / 100));
     const pn = parseInt($('pitch').value, 10);
-    const semis = ver >= 1.8 && voice === 'normal' ? ((Number.isNaN(pn) ? 50 : pn) - 50) / 100 * 12 * Math.log2(L_MAX / L_MIN) : 0;
+    const semis = ver >= 1.8 && (voice === 'normal' || voice === 'geun') ? ((Number.isNaN(pn) ? 50 : pn) - 50) / 100 * 12 * Math.log2(L_MAX / L_MIN) : 0;
     const keep = rate > 1.001 ? 1 / rate : 1;
-    let samples = natural ? mergeNatural(q, sr, level, keep) : merge(q, sr, voice === 'whisper', keep, semis);
+    let samples = natural ? mergeNatural(q, sr, level, keep) : merge(q, sr, voice === 'whisper', keep, semis, voice === 'geun');
     if (ver < 1.8){
       if (mode === 'fast') samples = stretch(samples, 1.5);
       if (mode === 'vfast') samples = stretch(samples, 2);
