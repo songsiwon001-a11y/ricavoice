@@ -104,8 +104,15 @@
       <div class="field" id="qualRow" style="display:none">
         <p class="grp">음성 품질</p>
         <select id="qual">
-          <option value="basic" selected>일반</option>
-          <option value="hq">고품질</option>
+          <option value="hq" selected>일반</option>
+          <option value="basic">고품질</option>
+        </select>
+      </div>
+      <div class="field" id="singerRow" style="display:none">
+        <p class="grp">노래 목소리</p>
+        <select id="singer">
+          <option value="rica" selected>리카</option>
+          <option value="geun">김근육</option>
         </select>
       </div>
       <div class="switchrow" id="wordRow" style="display:none">
@@ -211,8 +218,10 @@
   const VOICES = [['normal', '일반'], ['natural', '더 자연스러움'], ['whisper', '소곤거림']];
   const GEUN = [['geun', '김근육']];
   const SONG_LIST = [['twinkle', '반짝반짝 작은별'], ['airplane', '떴다 떴다 비행기'], ['daisy', 'Daisy Bell'], ['chiikawa', '치이카와 세이렌의 노래']];
-  const SONG_VOICES = [].concat(...SONG_LIST.map(w => [[w[0], w[1]], [w[0] + ':hq', w[1] + ' (고품질)']]));
-  const CHOIR_SONGS = ['twinkle', 'daisy'];
+  const withHq = list => [].concat(...list.map(w => [[w[0], w[1]], [w[0] + ':hq', w[1] + ' (고품질)']]));
+  const SONG_VOICES = withHq(SONG_LIST);
+  const SONG_VOICES_20 = withHq(SONG_LIST.concat([['kkutu', '끄투엔딩']]));
+  const CHOIR_SONGS = ['twinkle', 'daisy', 'kkutu'];
   const pitchVals = {natural: '30', song: '50', normal: '50'};
   const ERR = '현재 음성 합성 모델에 오류가 발생했습니다.';
 
@@ -221,7 +230,7 @@
   const model = $('model'), gear = $('gear'), settings = $('settings'), speed = $('speed');
   const infoBtn = $('info'), infoBox = $('modelInfo');
   const DESC = {
-    '2.0': 'rica 2.0은 음성 종류에 김근육 목소리가 추가되었습니다.',
+    '2.0': 'rica 2.0은 음성 종류에 김근육 목소리와 끄투엔딩 노래가 추가되었습니다.',
     '1.9': 'rica 1.9는 음성 종류에서 노래를 골라 원하는 멜로디로 노래를 부를 수 있습니다.',
     'music': '원하는 멜로디로 노래를 부를 수 있습니다.',
     'device': '기기에 내장된 음성 엔진을 사용합니다. 음성 설정은 기기 설정에서 하실 수 있습니다.',
@@ -285,48 +294,25 @@
     return specialPromise;
   }
 
-  const rawG = {}, GREF = {};
+  const rawG = {};
+  const GREF = {
+    'ㅏ': 200,
+    'ㅐ': 225,
+    'ㅔ': 225,
+    'ㅓ': 440,
+    'ㅗ': 440 * Math.pow(2, (49 - 69) / 12),
+    'ㅜ': 440 * Math.pow(2, (50 - 69) / 12),
+    'ㅡ': 130,
+    'ㅣ': 150
+  };
   let geunPromise = null;
-
-  function estimateF0(x, sr){
-    const N = x.length;
-    const lo = Math.floor(sr / 500), hi = Math.floor(sr / 70);
-    const s0 = Math.floor(N * 0.3);
-    const W = Math.min(Math.floor(N * 0.4), 6000, N - s0 - hi - 1);
-    if (W < hi) return 150;
-    const sc = [];
-    for (let l = lo; l <= hi; l++){
-      let c = 0;
-      for (let i = 0; i < W; i++) c += x[s0 + i] * x[s0 + i + l];
-      sc.push(c);
-    }
-    let k0 = 1;
-    while (k0 < sc.length && sc[k0] <= sc[k0 - 1]) k0++;
-    let mx = 0;
-    for (let k = k0; k < sc.length; k++) mx = Math.max(mx, sc[k]);
-    if (!(mx > 0)) return 150;
-    for (let k = k0; k < sc.length; k++){
-      if (sc[k] >= 0.9 * mx){
-        let m = k;
-        while (m + 1 < sc.length && sc[m + 1] >= sc[m]) m++;
-        let d = 0;
-        if (m > 0 && m + 1 < sc.length){
-          const a = sc[m - 1], b = sc[m], c = sc[m + 1];
-          const den = a - 2 * b + c;
-          if (den !== 0) d = 0.5 * (a - c) / den;
-        }
-        return sr / (lo + m + d);
-      }
-    }
-    return 150;
-  }
+  let geunSing = false;
 
   function ensureGeun(){
     if (!geunPromise){
       geunPromise = Promise.all(['ㅏ', 'ㅓ', 'ㅗ', 'ㅜ', 'ㅡ', 'ㅣ', 'ㅐㅔ'].map(async n => {
         const buf = await loadWav(encodeURIComponent(n + '(김근육)') + '.wav');
-        const ref = estimateF0(buf, ctx.sampleRate);
-        [...n].forEach(k => { rawG[k] = buf; GREF[k] = ref; });
+        [...n].forEach(k => { rawG[k] = buf; });
       })).then(() => true, () => {
         geunPromise = null;
         return false;
@@ -359,7 +345,7 @@
 
   function songKey(){
     if (model.value === 'music') return $('song').value;
-    if (parseFloat(model.value) >= 1.9 && SONG_VOICES.some(v => v[0] === $('voice').value)) return $('voice').value.replace(/:hq$/, '');
+    if (parseFloat(model.value) >= 1.9 && (parseFloat(model.value) >= 2 ? SONG_VOICES_20 : SONG_VOICES).some(v => v[0] === $('voice').value)) return $('voice').value.replace(/:hq$/, '');
     return null;
   }
 
@@ -377,7 +363,7 @@
     $('profRow').style.display = ver >= 1.4 || music ? '' : 'none';
     $('numRow').style.display = ver >= 1.6 || music ? '' : 'none';
     const voiceEl = $('voice');
-    const want = ver >= 2 ? VOICES.concat(GEUN, SONG_VOICES) : ver >= 1.9 ? VOICES.concat(SONG_VOICES) : VOICES;
+    const want = ver >= 2 ? VOICES.concat(GEUN, SONG_VOICES_20) : ver >= 1.9 ? VOICES.concat(SONG_VOICES) : VOICES;
     if (voiceEl.options.length !== want.length){
       const cur = voiceEl.value;
       voiceEl.innerHTML = '';
@@ -394,6 +380,7 @@
     $('voiceRow').style.display = v18 ? '' : 'none';
     $('songRow').style.display = music ? '' : 'none';
     $('qualRow').style.display = music ? '' : 'none';
+    $('singerRow').style.display = music || (ver >= 2 && sk) ? '' : 'none';
     $('choirRow').style.display = sk && CHOIR_SONGS.includes(sk) ? '' : 'none';
     $('wordRow').style.display = sk ? '' : 'none';
     $('pitchRow').style.display = music || (v18 && (vt === 'natural' || vt === 'normal' || vt === 'geun' || sk)) ? '' : 'none';
@@ -423,6 +410,38 @@
     settings.style.display = settings.style.display === 'none' ? 'block' : 'none';
   });
   $('voice').addEventListener('change', syncModel);
+
+  const JINGLE_V1 = 'c4 0.3s d4 0.3s e4 0.3s f4 0.3s g4 0.3s a4 0.3s b4 0.3s c5 0.3s';
+  const JINGLE_V2 = 'g3 0.3s b4 0.3s c4 0.3s f3 0.3s g3 0.3s f3 0.3s g3 0.3s c4 0.3s';
+  const JINGLE_V3 = 'e3 0.3s f3 0.3s g3 0.3s a3 0.3s g3 0.3s f3 0.3s g3 0.3s e3 0.3s';
+  let jingleSrc = null;
+
+  async function playJingle(on){
+    await loading;
+    if (failed || !ctx) return;
+    geunSing = false;
+    const q = [];
+    for (let i = 0; i < 8; i++) q.push({m: 'syl'}, 'ㅏ');
+    const lead = parseSong(JINGLE_V1);
+    const sr = ctx.sampleRate;
+    const samples = on
+      ? singChorus(q, sr, [lead, parseSong(JINGLE_V2), parseSong(JINGLE_V3)], 1, 0, true, false)
+      : singSong(q, sr, lead, 1, 0, true, false);
+    if (!samples.length) return;
+    const buf = ctx.createBuffer(1, samples.length, sr);
+    buf.copyToChannel(samples, 0);
+    if (jingleSrc){
+      try { jingleSrc.stop(); } catch (e) {}
+    }
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    src.connect(ctx.destination);
+    if (ctx.state === 'suspended') await ctx.resume();
+    src.start();
+    jingleSrc = src;
+  }
+
+  $('choir').addEventListener('change', () => { playJingle($('choir').checked); });
   $('pitch').addEventListener('input', () => {
     $('pitchVal').textContent = $('pitch').value + '%';
     pitchVals[pitchKey()] = $('pitch').value;
@@ -999,6 +1018,7 @@
   const SONGS = {
     twinkle: parseSong('c4 0.5 c4 0.5 g4 0.5 g4 0.5 a4 0.5 a4 0.5 g4 1 f4 0.5 f4 0.5 e4 0.5 e4 0.5 d4 0.5 d4 0.5 c4 1 g4 0.5 g4 0.5 f4 0.5 f4 0.5 e4 0.5 e4 0.5 d4 1 g4 0.5 g4 0.5 f4 0.5 f4 0.5 e4 0.5 e4 0.5 d4 1 c4 0.5 c4 0.5 g4 0.5 g4 0.5 a4 0.5 a4 0.5 g4 1 f4 0.5 f4 0.5 e4 0.5 e4 0.5 d4 0.5 d4 0.5 c4 1'),
     airplane: parseSong('e4 0.5 d4 0.5 c4 0.5 d4 0.5 e4 0.5 e4 0.5 e4 1 d4 0.5 d4 0.5 d4 1 e4 0.5 g4 0.5 g4 1 e4 0.5 d4 0.5 c4 0.5 d4 0.5 e4 0.5 e4 0.5 e4 1 d4 0.5 d4 0.5 e4 0.5 d4 0.5 c4 2'),
+    kkutu: parseSong('f4 0.15s g4 0.15s a#4 0.3s f4 0.3s a#4 0.3s d5 0.3s c5 0.3s f4 0.15s a4 0.15s c5 0.3s d#5 0.3s d5 0.3s g4 0.15s a#4 0.15s d#5 0.15s d5 0.15s c5 0.15s a#4 0.15s f5 0.9s d5 0.15s f5 0.15s g5 0.15s d#5 0.15s g5 0.15s a5 0.15s a#5 0.3s g5 0.3s f5 0.15s e5 0.15s f5 0.15s g5 0.15s f5 0.3s d5 0.3s c5 0.15s g4 0.15s f5 0.15s g5 0.15s f5 0.3s c5 0.3s a#4 0.9s f4 0.15s g4 0.15s a#4 0.3s f4 0.3s a#4 0.3s d5 0.3s c5 0.3s f4 0.15s a4 0.15s c5 0.3s d#5 0.3s d5 0.3s g4 0.15s a#4 0.15s d#5 0.15s d5 0.15s c5 0.15s a#4 0.15s f5 0.9s d5 0.15s f5 0.15s g5 0.15s d#5 0.15s g5 0.15s a5 0.15s a#5 0.3s g5 0.3s f5 0.15s e5 0.15s f5 0.15s g5 0.15s f5 0.3s d5 0.3s c5 0.15s g4 0.15s f5 0.15s g5 0.15s f5 0.3s c5 0.3s a#4 0.9s a#4 0.15s a4 0.15s g4 0.9s f4 0.3s d#4 0.6s 0.3s silent d#4 0.3s d4 0.3s d#4 0.3s d4 0.3s c4 0.3s a#3 0.6s f4 0.6s c4 0.6s a4 0.3s g4 0.3s f4 0.3s g4 0.3s f4 0.3s d#4 0.3s d4 0.3s c#4 0.3s d4 0.3s d#4 0.3s d4 0.6s a#3 0.3s a#3 0.3s f#4 0.9s f4 0.3s d#4 0.6s a#4 0.3s c5 0.3s d5 0.3s c#5 0.3s d5 0.3s d#5 0.3s d5 0.6s a#4 0.3s b4 0.3s c5 0.6s g4 0.3s d5 0.3s c5 0.3s a#4 0.3s a4 0.4s g5 0.3s f5 2.4s f4 0.15s g4 0.15s a#4 0.3s f4 0.3s a#4 0.3s d5 0.3s c5 0.3s f4 0.15s a4 0.15s c5 0.3s d#5 0.3s d5 0.3s g4 0.15s a#4 0.15s d#5 0.15s d5 0.15s c5 0.15s a#4 0.15s f5 0.9s d5 0.15s f5 0.15s g5 0.15s d#5 0.15s g5 0.15s a5 0.15s a#5 0.3s g5 0.3s f5 0.15s e5 0.15s f5 0.15s g5 0.15s f5 0.3s d5 0.3s c5 0.15s g4 0.15s f5 0.15s g5 0.15s f5 0.3s c5 0.3s a#4 0.9s'),
     chiikawa: parseSong('d4 0.4s c5 0.8s a4 0.4s b4 0.8s g4 0.4s a4 0.8s a4 0.2s c5 0.2s b4 0.8s d4 0.4s c5 0.8s a4 0.4s b4 0.8s g4 0.4s a4 0.8s a4 0.2s c5 0.2s b4 1.6s a4 0.2s a4 0.2s a4 0.4s f4 0.4s g4 0.2s g4 0.2s a4 0.4s a#4 0.4s c5 0.4s c5 0.4s d#5 0.4s d5 1.2s a#4 0.1s a#4 0.1s a#4 0.1s a#4 0.1s c5 0.2s c5 0.1s d5 0.8s 1s silent f4 0.8s f4 0.8s e4 0.8s f4 1.6s'),
     daisy: parseSong('g4 0.9s e4 0.9s c4 0.9s g3 0.9s a3 0.3s b3 0.3s c4 0.3s a3 0.6s c4 0.3 g3 1.8s d4 0.9s g4 0.9s e4 0.9s c4 0.9s a3 0.3s b3 0.3s c4 0.3s d4 0.6s e4 0.3s d4 1.5s e4 0.3s f4 0.3s e4 0.3s d4 0.3s g4 0.6s e4 0.3s d4 0.3s c4 1.2s d4 0.3s e4 0.6s c4 0.3s a3 0.6s c4 0.3s a3 0.3s g3 1.2s g3 0.3s c4 0.6s e4 0.3s d4 0.6s g3 0.3 c4 0.6s e4 0.3s d4 0.3s e4 0.3s f4 0.3s g4 0.3s e4 0.3s c4 0.3s d4 0.6s g3 0.3s c4 1.8s')
   };
@@ -1027,7 +1047,30 @@
     return lead.map(n => (n.silent ? n : {f: n.f / 2, d: n.d}));
   }
 
+  function syncPart(lead, str, starts, lag){
+    const onsets = [];
+    let t = 0;
+    lead.forEach(n => {
+      if (!n.silent) onsets.push(t);
+      t += n.d;
+    });
+    const pat = parseSong(str);
+    const notes = [];
+    starts.forEach(e => {
+      let u = onsets[e < 0 ? onsets.length + e : e] + lag;
+      pat.forEach(nt => {
+        const at = onsets.findIndex(o => Math.abs(o - u) < 1e-4);
+        if (at >= 0) notes.push({at, f: nt.f, d: nt.d});
+        u += nt.d;
+      });
+    });
+    return {sync: true, notes};
+  }
+
   const CHOIR = {
+    kkutu: [
+      syncPart(SONGS.kkutu, 'd4 0.3s a#3 0.3s d4 0.3s f4 0.3s d#4 0.3s c4 0.3s d#4 0.3s f4 0.3s d4 0.6s a#3 0.3s d4 0.3s f4 0.9s f4 0.3s g4 0.3s g4 0.15s a4 0.15s a#4 0.3s g4 0.3s f4 0.3s f4 0.15s g4 0.15s f4 0.3s d4 0.3s c4 0.15s d#4 0.15s f4 0.15s g4 0.15s f4 0.3s c4 0.3s a#3 0.9s', [40, -40], 0.3)
+    ],
     twinkle: [
       voicePart('g3 g3 e4 e4 f4 f4 e4 d4 d4 c4 c4 b3 b3 c4 e4 e4 d4 d4 c4 c4 b3 e4 e4 d4 d4 c4 c4 b3 g3 g3 e4 e4 f4 f4 e4 d4 d4 c4 c4 b3 b3 c4', SONGS.twinkle),
       voicePart('e3 e3 c4 c4 a3 a3 c4 b3 b3 g3 g3 d3 d3 e3 g3 g3 a3 a3 g3 g3 f3 g3 g3 a3 a3 g3 g3 g3 e3 e3 c4 c4 a3 a3 c4 b3 b3 g3 g3 d3 d3 e3', SONGS.twinkle),
@@ -1246,7 +1289,10 @@
   }
 
   function vowelPart(nuc, VT, Ls, prevLs, vib, sr, basic){
-    const keys = nuc.filter(k => (basic && BASIC_REF[k] ? raw[k] : raw8[k]));
+    const useG = basic && geunSing;
+    const srcOf = k => (useG && rawG[k] ? rawG[k] : raw[k]);
+    const refOf = k => (useG && rawG[k] ? GREF[k] : BASIC_REF[k]);
+    const keys = nuc.filter(k => (basic && BASIC_REF[k] ? srcOf(k) : raw8[k]));
     if (!keys.length || VT < 2) return new Float32Array(Math.max(0, VT));
     let w;
     if (keys.length === 1){
@@ -1265,7 +1311,7 @@
       const len = last ? VT - used : Math.round(VT * w[i]);
       const fi = i === 0 ? 0.015 : 0.008, fo = last ? 0.04 : 0.008;
       parts.push(basic && BASIC_REF[k]
-        ? loopVoice(raw[k], BASIC_REF[k], len, used, Ls, prevLs, vib, sr, fi, fo)
+        ? loopVoice(srcOf(k), refOf(k), len, used, Ls, prevLs, vib, sr, fi, fo)
         : sustain(raw8[k], len, used, Ls, prevLs, vib, sr, fi, fo));
       used += len;
     });
@@ -1321,7 +1367,7 @@
     return out;
   }
 
-  function singSong(base, sr, notes, tempo = 1, semis = 0, basic = false, byWord = false){
+  function singSong(base, sr, notes, tempo = 1, semis = 0, basic = false, byWord = false, leadNotes = null){
     const all = toSyllables(base);
     const groups = [];
     let cur = [];
@@ -1335,6 +1381,44 @@
       }
     }
     if (cur.length) groups.push(cur);
+    if (!Array.isArray(notes)){
+      if (!groups.length || !leadNotes) return new Float32Array(0);
+      const N = leadNotes.filter(n => !n.silent).length;
+      const starts = [];
+      let t = 0, qi = 0;
+      for (let g = 0; g < groups.length; g++){
+        let nt = leadNotes[qi % leadNotes.length];
+        while (nt.silent){
+          t += Math.max(1, Math.round(nt.d / tempo * sr));
+          qi++;
+          nt = leadNotes[qi % leadNotes.length];
+        }
+        qi++;
+        starts.push(t);
+        t += Math.max(1, Math.round(nt.d / tempo * sr));
+      }
+      const evs = [];
+      let end = 0;
+      for (let pass = 0; pass * N < groups.length; pass++){
+        for (const nt of notes.notes){
+          const g = pass * N + nt.at;
+          if (g >= groups.length) continue;
+          const L = Math.min(L_MAX, Math.max(L_MIN, 1 / (nt.f * Math.pow(2, semis / 12))));
+          const D = Math.max(1, Math.round(nt.d / tempo * sr));
+          const grp = groups[g];
+          const cnt = grp.length;
+          const ch = join(grp.map((sy, k) => sing(sy, Math.max(1, Math.floor(D * (k + 1) / cnt) - Math.floor(D * k / cnt)), L, k ? L : 0, sr, basic)));
+          evs.push([starts[g], ch]);
+          end = Math.max(end, starts[g] + ch.length);
+        }
+      }
+      const mix = new Float32Array(end);
+      for (const [st, ch] of evs) for (let i = 0; i < ch.length; i++) mix[st + i] += ch[i];
+      let pk = 0;
+      for (let i = 0; i < mix.length; i++) pk = Math.max(pk, Math.abs(mix[i]));
+      if (pk > 0.98) for (let i = 0; i < mix.length; i++) mix[i] *= 0.98 / pk;
+      return mix;
+    }
     if (!groups.length || !notes.some(n => !n.silent)) return new Float32Array(0);
     const chunks = [];
     let prevL = 0, ni = 0;
@@ -1364,7 +1448,7 @@
   }
 
   function singChorus(base, sr, parts, tempo, semis, basic, byWord){
-    const outs = parts.map(nt => singSong(base, sr, nt, tempo, semis, basic, byWord));
+    const outs = parts.map(nt => singSong(base, sr, nt, tempo, semis, basic, byWord, parts[0]));
     const n = Math.max(...outs.map(o => o.length));
     const out = new Float32Array(n);
     const g = 1 / Math.sqrt(outs.length);
@@ -1557,8 +1641,9 @@
     await loading;
     if (failed) return;
     await beepLoading;
-    const basic = model.value === 'music' ? $('qual').value === 'basic' : $('voice').value.indexOf(':hq') < 0;
-    const ok = basic ? true : await ensureSpecial();
+    const basic = model.value === 'music' ? $('qual').value === 'basic' : $('voice').value.indexOf(':hq') >= 0;
+    geunSing = basic && (model.value === 'music' || parseFloat(model.value) >= 2) && $('singer').value === 'geun';
+    const ok = (basic ? true : await ensureSpecial()) && (geunSing ? await ensureGeun() : true);
     if (!ok || (base.includes('BEEP') && !raw.BEEP)){
       msg.className = 'err';
       msg.textContent = ERR;
